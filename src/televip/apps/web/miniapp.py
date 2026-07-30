@@ -37,7 +37,7 @@ from televip.core.config import InitDataMode, Settings
 from televip.core.errors import InitDataError, InitDataExpired, InitDataReplay, RateLimited
 from televip.core.logging import get_logger
 from televip.db.engine import transaction
-from televip.services import settings_service
+from televip.services import referral, settings_service
 
 log = get_logger(__name__)
 
@@ -219,6 +219,21 @@ async def verify(payload: VerifyIn, request: Request) -> JSONResponse:
                 # Tới được đây nghĩa là chữ ký đã hợp lệ — mọi nhánh sai đều đã trả 403.
                 initdata_valid=True,
             )
+            # Chốt quan hệ giới thiệu NGAY TẠI ĐÂY, trong cùng transaction với việc đánh
+            # dấu đã xác minh. Đây là thời điểm duy nhất đúng: `qualify()` chỉ tính khi
+            # người được mời đã xác minh, và người được mời thì vừa xác minh xong.
+            #
+            # Chỉ làm phần DATABASE. Việc phát mã cho người mời cần `Sender`, thứ chỉ có
+            # ở tiến trình worker, nên nó do job định kỳ `award_referral_tiers` bên đó lo.
+            # Tách như vậy để một lỗi khi gửi tin không kéo theo việc mất luôn quan hệ
+            # giới thiệu vừa chốt được.
+            referrer_id = await referral.qualify(db, referee_id=identity.user_id)
+            if referrer_id is not None:
+                log.info(
+                    "verify.chot_gioi_thieu",
+                    referee_id=identity.user_id,
+                    referrer_id=referrer_id,
+                )
 
     if not just_verified:
         # Bấm hai lần, mạng chậm, mở lại Mini App — đều rơi vào đây. Không phải lỗi của

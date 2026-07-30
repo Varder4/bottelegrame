@@ -85,6 +85,17 @@ def _vn_time(moment: datetime, *, with_seconds: bool) -> str:
     return local.strftime(pattern)
 
 
+def vn_time(moment: datetime, *, with_seconds: bool) -> str:
+    """Bản công khai của `_vn_time`.
+
+    Cần thiết vì hai màn hình thống kê / bảng xếp hạng đi qua `text_service`: ở đó dấu
+    thời gian là **một biến chuỗi** (`{updated_at}`) do tầng gọi dựng sẵn, chứ không phải
+    một `datetime` được hàm dưới đây định dạng. Nếu tầng gọi tự `strftime` thì quy ước
+    hiển thị giờ có hai nguồn, và bản admin sửa được sẽ trôi khác bản mặc định.
+    """
+    return _vn_time(moment, with_seconds=with_seconds)
+
+
 # ── Alert của answerCallbackQuery ───────────────────────────────────
 # §13.3.3: mọi callback phải được answer trong 2 giây, kể cả nhánh lỗi.
 
@@ -544,11 +555,11 @@ def leaderboard(
         "\n"
         f"👑 BẢNG XẾP HẠNG — {mode}\n"
         "\n"
-        f"{_top_block('🏆 TOP MỜI BẠN BÈ', top_referrers, lambda n: f'💎 {n} người')}\n"
+        f"{_top_block('🏆 TOP MỜI BẠN BÈ', referrer_lines(top_referrers))}\n"
         "\n"
-        f"{_top_block('💰 TOP NHẬN CODE', top_receivers, lambda n: f'💵 {format_vnd(n)}đ')}\n"
+        f"{_top_block('💰 TOP NHẬN CODE', receiver_lines(top_receivers))}\n"
         "\n"
-        f"{_top_block('🔥 TOP ĐIỂM DANH', top_streaks, lambda n: f'🔥 {n} ngày liên tiếp')}\n"
+        f"{_top_block('🔥 TOP ĐIỂM DANH', streak_lines(top_streaks))}\n"
         "\n"
         f"{SEP}\n"
         "\n"
@@ -558,19 +569,38 @@ def leaderboard(
     )
 
 
-def _top_block(
-    title: str,
-    entries: Sequence[tuple[str, int]],
-    render_value: Callable[[int], str],
-) -> str:
-    header = f"{SEP}\n{title}\n{SEP}"
+def _top_block(title: str, lines: str) -> str:
+    return f"{SEP}\n{title}\n{SEP}\n{lines}"
+
+
+def top_lines(entries: Sequence[tuple[str, int]], render_value: Callable[[int], str]) -> str:
+    """Phần **thân** một bảng xếp hạng: huy chương + tên + dòng giá trị. Rỗng → `NO_DATA`.
+
+    Tách khỏi `_top_block` vì `leaderboard.screen` giao cho admin sửa phần văn xuôi bao
+    quanh, còn ba khối này đi vào template dưới dạng biến đã dựng sẵn
+    (`{block_referrers}`…). Tầng gọi cần đúng chuỗi này, không cần cái tiêu đề.
+    """
     if not entries:
-        return f"{header}\n{NO_DATA}"
-    lines = [
+        return NO_DATA
+    return "\n".join(
         f"{_MEDALS[i - 1] if i <= len(_MEDALS) else f'{i}.'} {name}\n   {render_value(value)}"
         for i, (name, value) in enumerate(entries, start=1)
-    ]
-    return header + "\n" + "\n".join(lines)
+    )
+
+
+def referrer_lines(entries: Sequence[tuple[str, int]]) -> str:
+    """Khối `🏆 TOP MỜI BẠN BÈ` — `(tên, số người đã mời)`."""
+    return top_lines(entries, lambda n: f"💎 {n} người")
+
+
+def receiver_lines(entries: Sequence[tuple[str, int]]) -> str:
+    """Khối `💰 TOP NHẬN CODE` — `(tên, tổng giá trị VNĐ)`."""
+    return top_lines(entries, lambda n: f"💵 {format_vnd(n)}đ")
+
+
+def streak_lines(entries: Sequence[tuple[str, int]]) -> str:
+    """Khối `🔥 TOP ĐIỂM DANH` — `(tên, số ngày liên tiếp)`."""
+    return top_lines(entries, lambda n: f"🔥 {n} ngày liên tiếp")
 
 
 # ── 13.2.7 · Điểm danh ──────────────────────────────────────────────
@@ -587,14 +617,18 @@ def checkin_success(*, points: int, balance: int, streak: int, tiers: Sequence[i
         "\n"
         f"💡 Mỗi ngày điểm danh nhận {format_vnd(points)}đ\n"
         "💡 Tích đủ điểm có thể đổi CODE:\n"
-        f"{_tier_hint_lines(tiers)}\n"
+        f"{checkin_tier_lines(tiers)}\n"
         "\n"
         '👉 Bấm "🎁 Đổi CODE" để đổi điểm lấy code nhé!'
     )
 
 
-def _tier_hint_lines(tiers: Sequence[int]) -> str:
-    """Bậc cuối cùng được đánh dấu `(TỐI ĐA)` — nó là trần thật, không phải chú thích đẹp."""
+def checkin_tier_lines(tiers: Sequence[int]) -> str:
+    """Bậc cuối cùng được đánh dấu `(TỐI ĐA)` — nó là trần thật, không phải chú thích đẹp.
+
+    Công khai vì `checkin.success` nhận khối này qua biến `{tier_lines}`: nó sinh trong
+    một vòng lặp nên không diễn đạt được bằng template, và tầng gọi phải dựng sẵn.
+    """
     last = len(tiers) - 1
     return "\n".join(
         f"   • {format_vnd(v)}đ = Code {value_label(v)}" + (" (TỐI ĐA)" if i == last else "")
@@ -620,8 +654,13 @@ def checkin_already(*, balance: int, streak: int) -> str:
 # ── 13.2.8 · Đổi điểm lấy code ──────────────────────────────────────
 
 
-def redeem_menu(*, balance: int, tiers: Sequence[int], points_per_day: int) -> str:
-    """Màn hình `🎁 Đổi CODE` — liệt kê **tất cả** bậc, đủ hay chưa đủ đều hiện."""
+def redeem_tier_lines(*, balance: int, tiers: Sequence[int], points_per_day: int) -> str:
+    """Một dòng cho MỖI bậc, đủ điểm hay chưa đủ đều hiện.
+
+    Công khai cùng lý do với `checkin_tier_lines`: `redeem.menu` nhận khối này qua biến
+    `{tier_lines}`. Số ngày là ước tính thô "còn thiếu / điểm mỗi ngày", làm tròn LÊN —
+    nói "~2 ngày" cho thứ cần 2 ngày rưỡi là hứa sớm hơn thực tế.
+    """
     lines = []
     for value in tiers:
         if balance >= value:
@@ -633,6 +672,11 @@ def redeem_menu(*, balance: int, tiers: Sequence[int], points_per_day: int) -> s
                 f"⏳ Code {value_label(value)} ({format_vnd(value)}đ)"
                 f" - Còn thiếu {format_vnd(missing)}đ (~{days} ngày)"
             )
+    return "\n".join(lines)
+
+
+def redeem_menu(*, balance: int, tiers: Sequence[int], points_per_day: int) -> str:
+    """Màn hình `🎁 Đổi CODE` — liệt kê **tất cả** bậc, đủ hay chưa đủ đều hiện."""
     body = (
         "🎁 ĐỔI ĐIỂM LẤY CODE\n"
         "\n"
@@ -640,7 +684,7 @@ def redeem_menu(*, balance: int, tiers: Sequence[int], points_per_day: int) -> s
         "\n"
         "📋 Bạn có thể chọn đổi ngay hoặc tiếp tục tích điểm:\n"
         "\n"
-        f"{chr(10).join(lines)}\n"
+        f"{redeem_tier_lines(balance=balance, tiers=tiers, points_per_day=points_per_day)}\n"
         "\n"
         "💡 LƯU Ý:\n"
         "• Bạn có thể chọn đổi bất kỳ loại nào đủ điểm\n"
@@ -699,6 +743,24 @@ def redeem_not_enough(*, balance: int, value_vnd: int) -> str:
 # ── 13.2.9 · Event đập hộp ──────────────────────────────────────────
 
 
+def event_prize_lines(prize_table: Sequence[tuple[int, int]]) -> str:
+    """Khối dòng tỉ lệ của caption event — **một dòng cho mỗi mức của bảng quay số**.
+
+    Tách riêng khỏi `event_box_caption` để `services/event_box.py` dựng được đúng khối
+    này cho biến `{prize_lines}` của khoá `event.box_caption` mà **không** gõ lại công
+    thức dòng ở chỗ thứ hai. Một công thức, hai nơi gọi: caption mặc định trong code và
+    caption admin đã sửa trong bảng đều in ra cùng những con số.
+    """
+    lines = []
+    for value_vnd, weight_bp in prize_table:
+        percent = _percent(weight_bp)
+        if value_vnd == 0:
+            lines.append(f"🤮 Hộp rỗng {percent}% 👻")
+        else:
+            lines.append(f"🎲 {value_vnd // 1000}k = 🎯 {percent}%")
+    return "\n".join(lines)
+
+
 def event_box_caption(prize_table: Sequence[tuple[int, int]], game_link: str) -> str:
     """Caption tin event, **render từ chính bảng tỉ lệ dùng để quay**.
 
@@ -710,19 +772,12 @@ def event_box_caption(prize_table: Sequence[tuple[int, int]], game_link: str) ->
     xác suất trúng 20k/50k/88k đều bằng 0. Nhận bảng qua tham số làm cho hai con số
     **không thể lệch nhau về mặt kiến trúc**.
     """
-    lines = []
-    for value_vnd, weight_bp in prize_table:
-        percent = _percent(weight_bp)
-        if value_vnd == 0:
-            lines.append(f"🤮 Hộp rỗng {percent}% 👻")
-        else:
-            lines.append(f"🎲 {value_vnd // 1000}k = 🎯 {percent}%")
     return (
         "🌟✨ Giật code giờ vàng✨🌟\n"
         "😎 Test thử nhân phẩm ngay nào 🎲🍀\n"
         "\n"
         "📌 Xác suất mở hộp:\n"
-        f"{chr(10).join(lines)}\n"
+        f"{event_prize_lines(prize_table)}\n"
         "\n"
         '😎 Min rút 50k Thoải mái "ăn non" – nói KHÔNG với vòng cược rườm rà! 🎲\n'
         f"🌐 Link Game: {game_link}"
@@ -756,6 +811,23 @@ def event_box_empty(game_link: str) -> str:
     return (
         "🤮 Hộp rỗng! 👻\n"
         "⁉️ Lượt này chưa trúng, hãy chờ lượt tiếp theo và MỞ QUÀ thật nhanh bạn nhé.\n"
+        "\n"
+        "🎮 Chơi game ngay:\n"
+        f"{game_link}"
+    )
+
+
+def event_box_budget_capped(game_link: str) -> str:
+    """Đợt đã chạm trần `settings.event.budget_cap_vnd`.
+
+    §13.5.1 điểm 3: chạm trần là **điều duy nhất** được phép làm lệch tỉ lệ đã quảng cáo,
+    nên nó phải hiện ra thành một câu khác hẳn hộp rỗng. Trả lại đúng câu "hộp rỗng" ở
+    đây là nói dối: người dùng đọc tỉ lệ 22% trúng trong khi xác suất thật lúc đó bằng 0.
+    """
+    return (
+        "📢 Đợt này đã phát hết phần quà! 🎁\n"
+        "⁉️ Ngân sách của đợt đã dùng hết nên lượt mở này không còn cơ hội trúng.\n"
+        "Hãy chờ đợt tiếp theo và mở thật nhanh bạn nhé.\n"
         "\n"
         "🎮 Chơi game ngay:\n"
         f"{game_link}"

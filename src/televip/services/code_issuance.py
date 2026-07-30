@@ -266,23 +266,42 @@ async def reap_reservations(db: AsyncSession, *, limit: int = 500) -> int:
 
     Đây là lý do "gửi tin thất bại" không còn đốt mã. Chạy định kỳ vài phút một lần.
     Trả về số mã đã thu hồi.
+
+    **Phải gỡ liên kết ở CẢ HAI phía.** Trả mã về kho mà để `code_grants.code_id` vẫn
+    trỏ tới nó là một cái bẫy chết người: bảng có `uq_grants_code UNIQUE (code_id)`, còn
+    `reserve()` chọn mã theo `ORDER BY code_id`, nên mã vừa thu hồi — vốn có id nhỏ nhất
+    — được chọn lại ở **mọi** lượt sau, rồi bước gắn mã nổ `UniqueViolation`. Lỗi đó
+    không phải `OutOfStock` cũng không phải `AlreadyClaimed` nên không handler nào bắt:
+    một lần gửi lỗi duy nhất là chết vĩnh viễn cả đường phát của loại code đó.
+
+    Gỡ xong, grant quay về đúng trạng thái "có grant nhưng chưa gắn mã" mà `reserve()`
+    đã xử lý sẵn (ném `AlreadyClaimed`), và mọi handler đều có nhánh cho nó.
     """
     result = await db.execute(
         text("""
-            UPDATE codes
-               SET status = 'available',
-                   reserved_for = NULL,
-                   reserved_until = NULL
-             WHERE code_id IN (
-                   SELECT code_id
-                     FROM codes
-                    WHERE status = 'reserved'
-                      AND reserved_until < now()
-                    ORDER BY reserved_until
-                      FOR UPDATE SKIP LOCKED
-                    LIMIT :limit
-             )
-         RETURNING code_id
+            WITH reclaimed AS (
+                UPDATE codes
+                   SET status = 'available',
+                       reserved_for = NULL,
+                       reserved_until = NULL
+                 WHERE code_id IN (
+                       SELECT code_id
+                         FROM codes
+                        WHERE status = 'reserved'
+                          AND reserved_until < now()
+                        ORDER BY reserved_until
+                          FOR UPDATE SKIP LOCKED
+                        LIMIT :limit
+                 )
+             RETURNING code_id
+            ), unlinked AS (
+                UPDATE code_grants
+                   SET code_id = NULL
+                 WHERE code_id IN (SELECT code_id FROM reclaimed)
+                   AND state = 'reserved'
+             RETURNING grant_id
+            )
+            SELECT code_id FROM reclaimed
         """),
         {"limit": limit},
     )

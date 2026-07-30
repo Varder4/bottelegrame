@@ -66,16 +66,28 @@ class FakeSender:
         return self.messages[-1]
 
 
-def make_update(user_id: int = OWNER_ID, *, callback_data: str | None = None) -> Any:
+def make_update(
+    user_id: int = OWNER_ID, *, callback_data: str | None = None, text: str | None = None
+) -> Any:
+    """`text` là **nguyên văn tin nhắn** kể cả tên lệnh.
+
+    `/broadcast` đọc thẳng `message.text` chứ không qua `context.args` — `args` do
+    `python-telegram-bot` dựng bằng `text.split()` nên mọi ký tự xuống dòng biến mất.
+    """
     chat = SimpleNamespace(id=user_id, type="private")
     user = SimpleNamespace(id=user_id, username=f"u{user_id}", full_name=f"U {user_id}")
     query = None if callback_data is None else SimpleNamespace(data=callback_data, id="q1")
     return SimpleNamespace(
         effective_chat=chat,
         effective_user=user,
-        effective_message=SimpleNamespace(message_id=1, text=None, chat=chat),
+        effective_message=SimpleNamespace(message_id=1, text=text, chat=chat),
         callback_query=query,
     )
+
+
+def broadcast_update(body: str, user_id: int = OWNER_ID) -> Any:
+    """Update của một lần gõ `/broadcast <body>`."""
+    return make_update(user_id, text=f"/broadcast {body}")
 
 
 def make_context(sender: FakeSender, *args: str) -> Any:
@@ -440,14 +452,14 @@ async def test_status_dot_khong_ton_tai(wired) -> None:
 
 
 def test_parse_args_mac_dinh_la_te_hep() -> None:
-    parsed = handler.parse_broadcast_args(["xin", "chao"])
+    parsed = handler.parse_broadcast_args("xin chao")
     assert parsed.audience == "active_30d"
     assert parsed.content == "xin chao"
     assert parsed.force_small is False
 
 
 def test_parse_args_co_all_va_force_small() -> None:
-    parsed = handler.parse_broadcast_args(["--all", "xin", "chao", "--force-small"])
+    parsed = handler.parse_broadcast_args("--all xin chao --force-small")
     assert parsed.audience == "all"
     assert parsed.force_small is True
     assert parsed.content == "xin chao"
@@ -455,9 +467,36 @@ def test_parse_args_co_all_va_force_small() -> None:
 
 def test_parse_args_tu_choi_co_la() -> None:
     with pytest.raises(handler.BroadcastArgError):
-        handler.parse_broadcast_args(["--al", "xin chao"])
+        handler.parse_broadcast_args("--al xin chao")
     with pytest.raises(handler.BroadcastArgError):
-        handler.parse_broadcast_args(["--all"])
+        handler.parse_broadcast_args("--all")
+
+
+def test_parse_args_giu_nguyen_xuong_dong() -> None:
+    """Tin ba đoạn phải tới người nhận đúng là ba đoạn."""
+    parsed = handler.parse_broadcast_args("dòng1\ndòng2\n\ndòng4")
+    assert parsed.content == "dòng1\ndòng2\n\ndòng4"
+
+
+def test_parse_args_giu_xuong_dong_ke_ca_khi_co_co() -> None:
+    parsed = handler.parse_broadcast_args("dòng1\ndòng2 --all")
+    assert parsed.content == "dòng1\ndòng2"
+    assert parsed.audience == "all"
+
+
+def test_parse_args_khong_coi_url_la_co() -> None:
+    """`--` giữa một từ không phải cờ; nếu không, mọi link có dấu gạch kép bị từ chối."""
+    parsed = handler.parse_broadcast_args("Vào https://televip.test/a--b nhé")
+    assert parsed.content == "Vào https://televip.test/a--b nhé"
+
+
+def test_parse_args_tu_choi_noi_dung_qua_dai() -> None:
+    with pytest.raises(handler.BroadcastArgError):
+        handler.parse_broadcast_args("x" * (handler.MAX_CONTENT_CHARS + 1))
+    # Đúng ngưỡng thì vẫn qua — đây là trần, không phải mốc dưới.
+    assert len(handler.parse_broadcast_args("x" * handler.MAX_CONTENT_CHARS).content) == (
+        handler.MAX_CONTENT_CHARS
+    )
 
 
 async def test_broadcast_khong_co_all_thi_dung_active_30d(wired) -> None:
@@ -466,7 +505,7 @@ async def test_broadcast_khong_co_all_thi_dung_active_30d(wired) -> None:
     await set_min_audience(1)
 
     sender = FakeSender()
-    await handler.cmd_broadcast(make_update(), make_context(sender, "xin", "chao"))
+    await handler.cmd_broadcast(broadcast_update("xin chao"), make_context(sender))
 
     row = (await fetch_all("SELECT job_id, audience, state, total FROM broadcast_jobs"))[0]
     assert row.audience == "active_30d"
@@ -483,7 +522,7 @@ async def test_broadcast_co_all_thi_ban_toan_te(wired) -> None:
     await set_min_audience(1)
 
     sender = FakeSender()
-    await handler.cmd_broadcast(make_update(), make_context(sender, "--all", "xin", "chao"))
+    await handler.cmd_broadcast(broadcast_update("--all xin chao"), make_context(sender))
 
     row = (await fetch_all("SELECT audience, total FROM broadcast_jobs"))[0]
     assert row.audience == "all"
@@ -495,7 +534,7 @@ async def test_broadcast_duoi_nguong_bi_tu_choi(wired) -> None:
     await set_min_audience(50)
 
     sender = FakeSender()
-    await handler.cmd_broadcast(make_update(), make_context(sender, "xin chao"))
+    await handler.cmd_broadcast(broadcast_update("xin chao"), make_context(sender))
 
     assert "TỪ CHỐI" in sender.last
     assert sender.markups[-1] is None  # không có nút GỬI NGAY nào để bấm nhầm
@@ -508,7 +547,7 @@ async def test_broadcast_force_small_vuot_nguong(wired) -> None:
     await set_min_audience(50)
 
     sender = FakeSender()
-    await handler.cmd_broadcast(make_update(), make_context(sender, "xin chao", "--force-small"))
+    await handler.cmd_broadcast(broadcast_update("xin chao --force-small"), make_context(sender))
 
     assert "XEM THỬ" in sender.last
     row = (await fetch_all("SELECT state FROM broadcast_jobs"))[0]
@@ -519,6 +558,37 @@ async def test_broadcast_thieu_noi_dung(wired) -> None:
     sender = FakeSender()
     await handler.cmd_broadcast(make_update(), make_context(sender))
     assert "Cú pháp" in sender.last
+    assert await scalar("SELECT count(*) FROM broadcast_jobs") == 0
+
+
+async def test_broadcast_giu_nguyen_xuong_dong_toi_tan_payload(wired) -> None:
+    """Tin hai dòng phải nằm trong `broadcast_jobs.payload` đúng là hai dòng.
+
+    Đây là nội dung thật sẽ được gửi đi; kiểm ở tầng parse thôi là chưa đủ, vì chỗ hỏng
+    cũ nằm giữa `message.text` và payload.
+    """
+    await make_user(4_401, active_days_ago=1)
+    await set_min_audience(1)
+
+    sender = FakeSender()
+    await handler.cmd_broadcast(broadcast_update("dòng1\ndòng2"), make_context(sender))
+
+    payload = (await fetch_all("SELECT payload FROM broadcast_jobs"))[0].payload
+    assert payload["text"] == "dòng1\ndòng2"
+    assert "dòng1\ndòng2" in sender.last  # bản xem thử cũng phải là hai dòng
+
+
+async def test_broadcast_tu_choi_noi_dung_qua_4000_ky_tu(wired) -> None:
+    await make_user(4_501, active_days_ago=1)
+    await set_min_audience(1)
+
+    sender = FakeSender()
+    await handler.cmd_broadcast(
+        broadcast_update("x" * (handler.MAX_CONTENT_CHARS + 1)), make_context(sender)
+    )
+
+    assert "vượt mức an toàn" in sender.last
+    # Không tạo đợt nháp nào: nút "GỬI NGAY" cho một tin Telegram sẽ từ chối là bẫy thuần tuý.
     assert await scalar("SELECT count(*) FROM broadcast_jobs") == 0
 
 
@@ -541,7 +611,7 @@ async def test_confirm_chay_dot_va_dung_vong_bom(wired, khong_bom) -> None:
     await make_user(5_001)
     await set_min_audience(1)
     sender = FakeSender()
-    await handler.cmd_broadcast(make_update(), make_context(sender, "xin chao"))
+    await handler.cmd_broadcast(broadcast_update("xin chao"), make_context(sender))
     job_id = (await fetch_all("SELECT job_id FROM broadcast_jobs"))[0].job_id
 
     await handler.handle_broadcast_callback(
@@ -561,7 +631,7 @@ async def test_confirm_lan_hai_khong_chay_lai(wired, khong_bom) -> None:
     await make_user(5_101)
     await set_min_audience(1)
     sender = FakeSender()
-    await handler.cmd_broadcast(make_update(), make_context(sender, "xin chao"))
+    await handler.cmd_broadcast(broadcast_update("xin chao"), make_context(sender))
     job_id = (await fetch_all("SELECT job_id FROM broadcast_jobs"))[0].job_id
 
     update = make_update(callback_data=f"bc_confirm_{job_id}")
@@ -576,7 +646,7 @@ async def test_nut_huy_thi_huy_dot(wired, khong_bom) -> None:
     await make_user(5_201)
     await set_min_audience(1)
     sender = FakeSender()
-    await handler.cmd_broadcast(make_update(), make_context(sender, "xin chao"))
+    await handler.cmd_broadcast(broadcast_update("xin chao"), make_context(sender))
     job_id = (await fetch_all("SELECT job_id FROM broadcast_jobs"))[0].job_id
 
     await handler.handle_broadcast_callback(

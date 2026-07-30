@@ -185,6 +185,7 @@ FUNCTION_TO_KEY: dict[str, str] = {
     "event_box_caption": "event.box_caption",
     "event_box_win": "event.box_win",
     "event_box_empty": "event.box_empty",
+    "event_box_budget_capped": "event.box_budget_capped",
     "share_event_default": "event.share_default",
     "support": "support.contact",
     "play_game": "game.play",
@@ -198,7 +199,27 @@ FUNCTION_TO_KEY: dict[str, str] = {
 #: Hàm KHÔNG phải câu chữ mà là quy tắc dựng chuỗi — cố ý không cho admin sửa.
 #: Xem mục cuối docstring của `services/text_service.py`.
 NOT_EDITABLE: frozenset[str] = frozenset(
-    {"format_vnd", "value_label", "display_name", "referral_link"}
+    {
+        "format_vnd",
+        "value_label",
+        "display_name",
+        "referral_link",
+        "event_prize_lines",
+        # Hai khối dòng của điểm danh / đổi điểm: sinh trong vòng lặp, đi vào template dưới
+        # dạng biến `{tier_lines}` đã dựng sẵn.
+        "checkin_tier_lines",
+        "redeem_tier_lines",
+        # Ba khối dòng của bảng xếp hạng, cùng lý do: huy chương và đơn vị sinh trong vòng
+        # lặp rồi đi vào `leaderboard.screen` dưới dạng `{block_*}`. Phần văn xuôi bao
+        # quanh chúng vẫn sửa được bình thường.
+        "top_lines",
+        "referrer_lines",
+        "receiver_lines",
+        "streak_lines",
+        # Định dạng mốc thời gian: đây là quy ước hiển thị giờ, không phải câu chữ. Cho sửa
+        # nghĩa là cho phép đổi cách hệ thống đọc một con số.
+        "vn_time",
+    }
 )
 
 

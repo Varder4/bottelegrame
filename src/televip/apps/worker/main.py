@@ -5,12 +5,28 @@
 
 Khởi động theo thứ tự: cấu hình → log → database → redis → bot. Mỗi bước fail-fast:
 thà không khởi động được còn hơn chạy với một nửa hạ tầng rồi hỏng lúc có người dùng.
+
+## Đây là nơi DUY NHẤT nối handler vào bot
+
+Ba bảng dữ liệu ở đầu file (`ADMIN_COMMANDS`, `ROUTE_HANDLERS`, `CALLBACK_HANDLERS`) là
+toàn bộ sơ đồ đấu nối. Thêm một nút là thêm một dòng, và không có cách nào thêm nhầm nó
+vào **sau** lưới an toàn callback ở cuối `register_handlers()`.
+
+Hai bảng sau trỏ tới handler bằng chuỗi `"module:hàm"` chứ không bằng hàm đã import. Lý do
+rất cụ thể: các nhóm luồng được viết song song, nên một module có thể chưa nằm trong cây
+source lúc file này được nạp. Với chuỗi, module thiếu chỉ làm **một nút** rơi vào lưới an
+toàn kèm một dòng WARNING gọi đích danh nó; với `import` ở đầu file, cả tiến trình không
+khởi động được. Danh sách nút chưa nối đọc được bằng `unresolved_targets()`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib
+import pkgutil
+from typing import Final
 
+from sqlalchemy import text
 from telegram import BotCommand, Update
 from telegram.ext import (
     Application,
@@ -22,24 +38,28 @@ from telegram.ext import (
     filters,
 )
 
+from televip.apps.worker.handlers import referral as referral_handlers
 from televip.apps.worker.handlers.admin import broadcast as admin_broadcast
 from televip.apps.worker.handlers.admin import codes as admin_codes
+from televip.apps.worker.handlers.admin import event as admin_event
 from televip.apps.worker.handlers.admin import ops as admin_ops
 from televip.apps.worker.handlers.admin import texts as admin_texts
-from televip.apps.worker.handlers.open_gift import handle_open_gift
-from televip.apps.worker.handlers.start import handle_start
-from televip.apps.worker.handlers.tanthu import handle_check_groups, handle_tanthu
 from televip.apps.worker.outbox_worker import run_outbox_worker
 from televip.cache.client import close_redis, init_redis
 from televip.core.config import get_settings
 from televip.core.logging import get_logger, setup_logging
-from televip.db.engine import dispose_engine, init_engine
+from televip.db.engine import dispose_engine, init_engine, session, transaction
 from televip.services import broadcast as broadcast_service
+from televip.services import code_issuance, settings_service, stats
+from televip.services.admin import Handler
 from televip.services.membership import handle_chat_member_update
 from televip.telegram import keyboards
 from televip.telegram.sender import Sender
 
 log = get_logger(__name__)
+
+_HANDLERS_PKG: Final = "televip.apps.worker.handlers"
+_ADMIN_PKG: Final = f"{_HANDLERS_PKG}.admin"
 
 #: Lệnh admin → handler. Mỗi handler đã mang `@admin_command(...)`, nên đăng ký ở đây
 #: KHÔNG cấp quyền cho ai: người không có quyền vẫn gõ được lệnh và vẫn bị chặn ở
@@ -47,7 +67,7 @@ log = get_logger(__name__)
 #:
 #: Cố ý là một bảng dữ liệu chứ không phải 14 dòng `app.add_handler`: thêm một lệnh admin
 #: là thêm một dòng, và không có cách nào thêm nhầm nó vào SAU lưới an toàn callback.
-ADMIN_COMMANDS: list[tuple[str, object]] = [
+ADMIN_COMMANDS: list[tuple[str, Handler]] = [
     # Kho code (§13.4.2)
     ("add_giffcode", admin_codes.handle_add_giffcode),
     ("del_code", admin_codes.handle_del_code),
@@ -69,7 +89,48 @@ ADMIN_COMMANDS: list[tuple[str, object]] = [
     # Bắn tin hàng loạt (§13.4.2 mục 8 và §13.4.3). `/broadcast` KHÔNG gửi ngay khi gõ:
     # nó dựng bản xem thử rồi chờ nút xác nhận — xem `handlers/admin/broadcast.py`.
     *admin_broadcast.COMMANDS,
+    # Phát event đập hộp (§13.4.2 mục 9), cũng có bước xem thử + xác nhận.
+    *admin_event.COMMANDS,
 ]
+
+#: Nhãn nút ReplyKeyboard → handler, khoá theo tên route của `keyboards.ROUTE_TABLE`.
+#: Bảng phải phủ **đúng** tập route đó (có test giữ hai bên không lệch nhau).
+ROUTE_HANDLERS: dict[str, str] = {
+    "play_game": f"{_HANDLERS_PKG}.misc:handle_play_game",
+    "tan_thu": f"{_HANDLERS_PKG}.tanthu:handle_tanthu",
+    "moi_ban": f"{_HANDLERS_PKG}.referral:handle_moi_ban",
+    "share_event": f"{_HANDLERS_PKG}.misc:handle_share_event",
+    "checkin": f"{_HANDLERS_PKG}.checkin:handle_checkin",
+    # Nút này chỉ mở MÀN HÌNH đổi code; lượt đổi thật đi qua callback `redeem_<mệnh giá>`.
+    "redeem_code": f"{_HANDLERS_PKG}.checkin:handle_redeem_menu",
+    "leaderboard": f"{_HANDLERS_PKG}.misc:handle_leaderboard",
+    "check_share": f"{_HANDLERS_PKG}.referral:handle_check_share",
+    "stats": f"{_HANDLERS_PKG}.misc:handle_stats",
+    "support": f"{_HANDLERS_PKG}.misc:handle_support",
+}
+
+#: `(mẫu callback_data, "module:hàm")`, đăng ký theo đúng thứ tự này. Mẫu nào cũng phải
+#: neo hai đầu (`^...$`): một mẫu lỏng nuốt callback của nút khác và triệu chứng là "bấm
+#: nút A thì màn hình B hiện ra".
+CALLBACK_HANDLERS: tuple[tuple[str, str], ...] = (
+    (f"^{keyboards.CB_OPEN_GIFT}$", f"{_HANDLERS_PKG}.open_gift:handle_open_gift"),
+    (f"^{keyboards.CB_CHECK_GROUPS}$", f"{_HANDLERS_PKG}.tanthu:handle_check_groups"),
+    (f"^{keyboards.CB_JOIN_REFERRAL}$", f"{_HANDLERS_PKG}.referral:handle_join_referral"),
+    (f"^{keyboards.CB_LB_TODAY}$", f"{_HANDLERS_PKG}.misc:handle_leaderboard_today"),
+    (f"^{keyboards.CB_LB_ALLTIME}$", f"{_HANDLERS_PKG}.misc:handle_leaderboard_alltime"),
+    # Nút "đang xem" của bảng xếp hạng: vẫn phải được answer, nếu không nó quay vòng.
+    (f"^{keyboards.CB_NOOP}$", f"{_HANDLERS_PKG}.misc:handle_noop"),
+    (rf"^{keyboards.CB_OPEN_BOX_PREFIX}\d+$", f"{_HANDLERS_PKG}.event_box:handle_open_box"),
+    (rf"^{keyboards.CB_REDEEM_PREFIX}\d+$", f"{_HANDLERS_PKG}.checkin:handle_redeem"),
+    # Nút xác nhận của hai lệnh admin có bước xem thử. Handler tự kiểm quyền
+    # (`@admin_command`) — đăng ký ở đây không cấp quyền cho ai, và cả hai phải đứng TRƯỚC
+    # lưới an toàn callback.
+    (
+        admin_broadcast.CALLBACK_PATTERN,
+        f"{_ADMIN_PKG}.broadcast:handle_broadcast_callback",
+    ),
+    (admin_event.CALLBACK_PATTERN, f"{_ADMIN_PKG}.event:handle_send_event_callback"),
+)
 
 #: Menu lệnh cho người dùng thường (13-dac-ta §13.3.2). Lệnh admin KHÔNG nằm ở đây —
 #: chúng chỉ hiện với từng admin qua `BotCommandScopeChat`.
@@ -81,6 +142,298 @@ PUBLIC_COMMANDS = [
 
 #: Khoá giữ task của worker outbox trong `bot_data` — để chỗ tắt tiến trình huỷ được nó.
 OUTBOX_TASK_KEY = "outbox_worker_task"
+
+#: Chu kỳ job trả mã giữ chỗ quá hạn về kho. Hằng chỉ là đường lui khi `settings` chưa seed.
+REAP_SECONDS_KEY: Final = "jobs.reap_reservations_seconds"
+DEFAULT_REAP_SECONDS: Final = 60
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Phân giải "module:hàm"
+# ══════════════════════════════════════════════════════════════════════
+
+#: Những đích không phân giải được ở lần đăng ký gần nhất. Đọc bằng `unresolved_targets()`.
+_unresolved: list[str] = []
+
+
+def unresolved_targets() -> list[str]:
+    """Các `"module:hàm"` chưa nối được — nút của chúng rơi vào lưới an toàn."""
+    return list(_unresolved)
+
+
+def _resolve(target: str) -> Handler | None:
+    """`"gói.module:hàm"` → hàm, hoặc `None` nếu module/hàm chưa tồn tại.
+
+    Chỉ nuốt đúng một tình huống: **chính** module đích chưa có mặt. Một `ImportError` từ
+    bên trong module (lỗi thật của module đó) vẫn ném ra ngoài — nuốt nó đi là biến một
+    lỗi cú pháp thành một nút im lặng không ai giải thích được.
+    """
+    module_path, _, attribute = target.partition(":")
+    try:
+        module = importlib.import_module(module_path)
+    except ModuleNotFoundError as exc:
+        if exc.name != module_path:
+            raise
+        _unresolved.append(target)
+        log.warning("handler_chua_co", target=target)
+        return None
+
+    handler = getattr(module, attribute, None)
+    if handler is None:
+        # Module có nhưng tên hàm khác: đây là lệch giao kèo giữa hai khối, không phải
+        # "chưa làm xong" — nên là ERROR, không phải WARNING.
+        _unresolved.append(target)
+        log.error("handler_sai_ten", target=target)
+        return None
+    return handler
+
+
+def _discovered_admin_commands(known: set[str]) -> list[tuple[str, Handler]]:
+    """Quét gói `handlers/admin`, lấy `COMMANDS` (hoặc `HANDLERS`) của module chưa khai báo.
+
+    Bảng `ADMIN_COMMANDS` ở trên liệt kê tường minh các module đã có; vòng quét này là chỗ
+    một module lệnh admin mới **tự** vào bot bằng cách xuất một trong hai tên đó, không cần
+    ai nhớ sửa file này. Module không xuất gì cả thì bị bỏ qua kèm một dòng WARNING — im
+    lặng ở đây nghĩa là một bộ lệnh admin không tồn tại mà không ai biết.
+    """
+    package = importlib.import_module(_ADMIN_PKG)
+    found: list[tuple[str, Handler]] = []
+
+    for info in sorted(pkgutil.iter_modules(package.__path__), key=lambda m: m.name):
+        module = importlib.import_module(f"{_ADMIN_PKG}.{info.name}")
+        exported = getattr(module, "COMMANDS", None) or getattr(module, "HANDLERS", None)
+        if exported is None:
+            if info.name not in {"guard"}:
+                log.warning("module_admin_khong_xuat_lenh", module=info.name)
+            continue
+
+        pairs = exported.items() if isinstance(exported, dict) else exported
+        for name, handler in pairs:
+            if name in known:
+                continue
+            known.add(name)
+            found.append((name, handler))
+            log.info("lenh_admin_tu_phat_hien", module=info.name, command=name)
+
+    return found
+
+
+def admin_command_handlers() -> list[tuple[str, Handler]]:
+    """Bảng tường minh + những gì vòng quét tìm thêm được, không trùng tên lệnh."""
+    out = list(ADMIN_COMMANDS)
+    return out + _discovered_admin_commands({name for name, _ in out})
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Đấu nối
+# ══════════════════════════════════════════════════════════════════════
+
+
+def register_handlers(app: Application) -> None:
+    """Nối toàn bộ handler vào `app`, **đúng thứ tự**.
+
+    Thứ tự là một phần của hành vi, không phải chuyện thẩm mỹ: python-telegram-bot giao
+    update cho handler ĐẦU TIÊN khớp trong cùng một nhóm, nên lưới an toàn callback phải
+    là dòng cuối cùng của hàm này.
+    """
+    _unresolved.clear()
+
+    app.add_handler(CommandHandler("start", _require(f"{_HANDLERS_PKG}.start:handle_start")))
+
+    for name, handler in admin_command_handlers():
+        app.add_handler(CommandHandler(name, handler))
+
+    # `filters.Text([...])` so khớp BẰNG NHAU TUYỆT ĐỐI với nhãn nút. Bot cũ dùng
+    # `"Game" in text` nên mọi tin nhắn chứa chữ đó rơi nhầm handler (`keyboards.py`).
+    for label, route in keyboards.ROUTE_TABLE.items():
+        target = ROUTE_HANDLERS.get(route)
+        if target is None:
+            # Nút có trên bàn phím mà không có dòng nào trong bảng: lỗi lập trình, không
+            # phải "khối kia chưa xong". Có test chặn, nên tới được đây là bảng vừa bị sửa.
+            log.error("nut_khong_co_trong_bang", route=route)
+            continue
+        handler = _resolve(target)
+        if handler is None:
+            continue
+        app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.Text([label]), handler))
+
+    for pattern, target in CALLBACK_HANDLERS:
+        handler = _resolve(target)
+        if handler is not None:
+            app.add_handler(CallbackQueryHandler(handler, pattern=pattern))
+
+    # Nguồn cập nhật `group_memberships`, 0 lời gọi API. Phải đi cùng `ALLOWED_UPDATES`
+    # bên dưới — thiếu một trong hai là bảng đóng băng vĩnh viễn mà không có dòng lỗi nào.
+    app.add_handler(ChatMemberHandler(handle_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
+
+    # Lưới an toàn, PHẢI đứng cuối cùng: mọi callback chưa có handler riêng vẫn được
+    # `answerCallbackQuery`. Thiếu nó thì nút bấm quay vòng tới khi Telegram tự huỷ query
+    # và người dùng bấm lại — đúng hành vi đặc tả §13.3.3 cấm. Handler này chỉ trả lời
+    # cho nút, không làm gì khác, nên nút chưa nối vẫn im lặng đúng nghĩa chứ không treo.
+    app.add_handler(CallbackQueryHandler(_answer_unhandled_callback))
+
+    if _unresolved:
+        log.warning("nut_chua_noi", targets=_unresolved, so_luong=len(_unresolved))
+
+
+def _require(target: str) -> Handler:
+    """Như `_resolve` nhưng bắt buộc phải có — dùng cho `/start`, cửa vào duy nhất của bot."""
+    handler = _resolve(target)
+    if handler is None:
+        raise RuntimeError(f"không nối được handler bắt buộc: {target}")
+    return handler
+
+
+async def _answer_unhandled_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+    log.info("callback_chua_noi", data=query.data)
+    await context.application.bot_data["sender"].answer_callback(
+        query, "Chức năng này đang được hoàn thiện."
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Job định kỳ
+# ══════════════════════════════════════════════════════════════════════
+
+
+async def job_refresh_system_stats(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Làm mới bảng tổng hợp mà màn hình `📊Thống Kê TK` đọc (§13.2.5)."""
+    async with transaction() as db:
+        snapshot = await stats.refresh_system_stats(db)
+    log.debug("system_stats_da_lam_moi", total_users=snapshot.total_users)
+
+
+async def job_reap_reservations(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Trả mã giữ chỗ quá hạn về kho.
+
+    Không có job này thì mỗi lần gửi thất bại là một mã bị treo ở `reserved` vĩnh viễn:
+    không ai nhận được nó và kho cũng không lấy lại được.
+    """
+    async with transaction() as db:
+        released = await code_issuance.reap_reservations(db)
+    if released:
+        log.info("ma_giu_cho_qua_han_da_tra_ve_kho", so_luong=released)
+
+
+async def job_award_referral_tiers(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Phát bù mọi mốc mời bạn đã đạt mà chưa nhận.
+
+    **Vì sao là job định kỳ chứ không gọi thẳng lúc xác minh:** người được mời xác minh
+    ở tiến trình **web** (`/api/verify`), nơi đó chốt quan hệ giới thiệu vào database
+    nhưng không có `Sender` để nhắn cho người mời. Việc gửi thuộc về tiến trình **worker**.
+
+    Tách như vậy còn một cái lợi nữa: một lỗi khi gửi tin không kéo theo việc mất quan hệ
+    giới thiệu vừa chốt — lượt chạy sau của job này sẽ phát lại, và `referral_rewards`
+    có khoá chính `(user_id, tier_no)` nên không bao giờ phát trùng.
+    """
+    sender = context.application.bot_data["sender"]
+
+    async with session() as db:
+        candidates = (
+            (
+                await db.execute(
+                    text("""
+                SELECT r.referrer_id
+                  FROM referrals r
+                 WHERE r.qualified_at IS NOT NULL
+                 GROUP BY r.referrer_id
+                HAVING count(*) / GREATEST(:interval, 1)
+                       > COALESCE(
+                           (SELECT count(*) FROM referral_rewards w
+                             WHERE w.user_id = r.referrer_id), 0)
+                 LIMIT :limit
+                """),
+                    {
+                        "interval": await settings_service.get_int("referral.interval", 5),
+                        "limit": 200,
+                    },
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    if not candidates:
+        return
+
+    awarded = 0
+    for referrer_id in candidates:
+        try:
+            async with transaction() as db:
+                tiers = await referral_handlers.award_pending_tiers(sender, db, referrer_id)
+            awarded += len(tiers)
+        except Exception:  # noqa: BLE001 - một người hỏng không được làm dừng cả lượt
+            log.exception("phat_moc_that_bai", referrer_id=referrer_id)
+
+    if awarded:
+        log.info("da_phat_moc_moi_ban", so_moc=awarded, so_nguoi=len(candidates))
+
+
+async def job_refresh_user_stats(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Làm mới `user_stats` — bảng mà bảng xếp hạng toàn thời gian và màn hình hồ sơ đọc.
+
+    Không có job này thì bảng rỗng vĩnh viễn: `📊Thống Kê TK` in "0 người đã mời" cho mọi
+    người và `👑 BXH` toàn thời gian không bao giờ có tên ai, kể cả người đã mời 50 bạn.
+    """
+    async with transaction() as db:
+        n = await stats.refresh_user_stats(db)
+    log.debug("user_stats_da_lam_moi", so_dong=n)
+
+
+async def schedule_jobs(app: Application) -> None:
+    """Đặt các job định kỳ. Chu kỳ đọc từ `settings`, không viết cứng."""
+    queue = app.job_queue
+    if queue is None:  # pragma: no cover - chỉ xảy ra khi thiếu extra `job-queue`
+        log.error("khong_co_job_queue")
+        return
+
+    stats_seconds = await settings_service.get_int(
+        stats.REFRESH_SECONDS_KEY, stats.DEFAULT_REFRESH_SECONDS
+    )
+    reap_seconds = await settings_service.get_int(REAP_SECONDS_KEY, DEFAULT_REAP_SECONDS)
+
+    # `first=` bằng đúng chu kỳ: lúc khởi động, việc cần làm là phục vụ update chứ không
+    # phải chạy hai truy vấn tổng hợp toàn bảng.
+    queue.run_repeating(
+        job_refresh_system_stats,
+        interval=stats_seconds,
+        first=stats_seconds,
+        name="refresh_system_stats",
+    )
+    queue.run_repeating(
+        job_reap_reservations,
+        interval=reap_seconds,
+        first=reap_seconds,
+        name="reap_reservations",
+    )
+    # Phát mốc mời bạn: chu kỳ ngắn vì đây là phần thưởng người dùng đang chờ. 60 giây là
+    # độ trễ chấp nhận được giữa lúc bạn mình xác minh xong và lúc mình nhận được mã.
+    queue.run_repeating(
+        job_award_referral_tiers,
+        interval=60,
+        first=30,
+        name="award_referral_tiers",
+    )
+    queue.run_repeating(
+        job_refresh_user_stats,
+        interval=stats_seconds,
+        first=stats_seconds + 5,  # lệch với job kia để hai truy vấn tổng hợp không đụng nhau
+        name="refresh_user_stats",
+    )
+    log.info(
+        "job_dinh_ky_da_dat",
+        stats_giay=stats_seconds,
+        reap_giay=reap_seconds,
+        so_job=4,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Vòng đời tiến trình
+# ══════════════════════════════════════════════════════════════════════
 
 
 def _start_outbox_worker(app: Application) -> asyncio.Task[None]:
@@ -116,6 +469,9 @@ async def _on_startup(app: Application) -> None:
     await app.bot.set_my_commands(PUBLIC_COMMANDS)
     me = await app.bot.get_me()
     _start_outbox_worker(app)
+    # Chu kỳ job đọc từ `settings`, tức từ database — nên phải đặt ở đây chứ không ở
+    # `build_application()`, chỗ chưa được phép `await`.
+    await schedule_jobs(app)
     # Đợt broadcast còn dở sau một lần restart: trạng thái nằm trong `broadcast_targets`
     # nên "chạy tiếp" chỉ là dựng lại vòng bơm. Thiếu bước này thì đợt đứng im vĩnh viễn ở
     # trạng thái `running` mà không có dòng lỗi nào.
@@ -144,52 +500,8 @@ def build_application() -> Application:
     app.bot_data["settings"] = settings
     app.bot_data["sender"] = Sender(app.bot)
 
-    app.add_handler(CommandHandler("start", handle_start))
-
-    for name, handler in ADMIN_COMMANDS:
-        app.add_handler(CommandHandler(name, handler))
-
-    # `filters.Text([...])` so khớp BẰNG NHAU TUYỆT ĐỐI với nhãn nút. Bot cũ dùng
-    # `"Game" in text` nên mọi tin nhắn chứa chữ đó rơi nhầm handler (`keyboards.py`).
-    app.add_handler(
-        MessageHandler(
-            filters.ChatType.PRIVATE & filters.Text([keyboards.BTN_CODE_TAN_THU]),
-            handle_tanthu,
-        )
-    )
-    app.add_handler(
-        CallbackQueryHandler(handle_check_groups, pattern=f"^{keyboards.CB_CHECK_GROUPS}$")
-    )
-    app.add_handler(CallbackQueryHandler(handle_open_gift, pattern=f"^{keyboards.CB_OPEN_GIFT}$"))
-    # Hai nút xác nhận của `/broadcast`. Handler tự kiểm quyền (`@admin_command`) — đăng ký
-    # ở đây không cấp quyền cho ai, và nó phải đứng TRƯỚC lưới an toàn callback bên dưới.
-    app.add_handler(
-        CallbackQueryHandler(
-            admin_broadcast.handle_broadcast_callback,
-            pattern=admin_broadcast.CALLBACK_PATTERN,
-        )
-    )
-    # Nguồn cập nhật `group_memberships`, 0 lời gọi API. Phải đi cùng `ALLOWED_UPDATES`
-    # bên dưới — thiếu một trong hai là bảng đóng băng vĩnh viễn mà không có dòng lỗi nào.
-    app.add_handler(ChatMemberHandler(handle_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
-
-    # Lưới an toàn, PHẢI đứng cuối cùng: mọi callback chưa có handler riêng vẫn được
-    # `answerCallbackQuery`. Thiếu nó thì nút bấm quay vòng tới khi Telegram tự huỷ query
-    # và người dùng bấm lại — đúng hành vi đặc tả §13.3.3 cấm. Handler này chỉ trả lời
-    # cho nút, không làm gì khác, nên nút chưa nối vẫn im lặng đúng nghĩa chứ không treo.
-    app.add_handler(CallbackQueryHandler(_answer_unhandled_callback))
-
+    register_handlers(app)
     return app
-
-
-async def _answer_unhandled_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query is None:
-        return
-    log.info("callback_chua_noi", data=query.data)
-    await context.application.bot_data["sender"].answer_callback(
-        query, "Chức năng này đang được hoàn thiện."
-    )
 
 
 #: `chat_member` phải khai tường minh: Telegram KHÔNG gửi loại update này nếu không xin.

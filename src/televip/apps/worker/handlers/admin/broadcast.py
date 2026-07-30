@@ -21,6 +21,11 @@ Ba luật của file này, mỗi luật là một chỗ hệ cũ đã trả giá
 Toàn bộ phản hồi là **văn bản thuần, không `parse_mode`**: nội dung đợt do admin dán vào
 và một dấu `<` hay `*` lạc chỗ sẽ làm Telegram từ chối cả tin — khi đó admin không thấy
 bản xem thử và sẽ gõ lại lệnh, đúng thứ mục 1 sinh ra để ngăn.
+
+**Nội dung đọc thẳng từ `message.text`, KHÔNG qua `context.args`** — cùng lý do đã ghi ở
+`handlers/admin/texts.py` điểm 2: `python-telegram-bot` dựng `args` bằng `text.split()`,
+nên mọi ký tự xuống dòng biến mất và một thông báo ba đoạn bị ép thành một khối chữ liền.
+Đợt bắn tin là chỗ hậu quả đắt nhất: nó đi tới hàng chục nghìn người và không thu hồi được.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from televip.apps.worker.handlers.admin.texts import raw_argument
 from televip.cache.ratelimit import BULK_FLOOR
 from televip.core.logging import get_logger
 from televip.db.engine import session, transaction
@@ -68,6 +74,13 @@ _CB_RE: Final = re.compile(r"^bc_(confirm|cancel)_(\d+)$")
 #: Độ dài phần nội dung in trong bản xem thử. Trần một tin Telegram là 4096 ký tự và bản
 #: xem thử còn phải chứa số liệu + cảnh báo.
 PREVIEW_CHARS: Final = 1_200
+
+#: Trần độ dài nội dung một đợt, chặn ngay lúc đọc tham số. Trần cứng của Telegram là
+#: 4.096; vượt qua nó là `BadRequest`, thứ lớp gửi coi là **lỗi vĩnh viễn** nên không thử
+#: lại. Với một đợt bắn tin, hậu quả không phải "một tin hỏng" mà là toàn bộ đợt chạy hết
+#: vòng, đếm đủ số đích, và **không một ai nhận được gì**. Chừa 96 ký tự đệm, cùng con số
+#: và cùng lý do với `text_service.MAX_RENDERED_LENGTH`.
+MAX_CONTENT_CHARS: Final = 4_000
 
 #: Nhãn tiếng Việt của `audience`, dùng trong mọi màn hình của file này.
 AUDIENCE_LABEL: Final[dict[str, str]] = {
@@ -179,23 +192,32 @@ async def min_audience(db: AsyncSession | None = None) -> int:
     return await settings_service.get_int(MIN_AUDIENCE_KEY, DEFAULT_MIN_AUDIENCE, db=db)
 
 
-def parse_broadcast_args(args: list[str]) -> BroadcastArgs:
-    """Tách cờ khỏi nội dung. Cờ có thể đứng bất cứ đâu trong câu lệnh.
+#: Một cờ là một từ bắt đầu bằng `--` đứng ngay sau khoảng trắng (hoặc đầu chuỗi). Ràng
+#: buộc "đứng đầu từ" là cần thiết: một URL kiểu `https://x.test/a--b` không được biến
+#: thành cờ lạ và làm cả lệnh bị từ chối.
+_FLAG_RE: Final = re.compile(r"(?<!\S)--\S+")
+
+
+def parse_broadcast_args(raw: str) -> BroadcastArgs:
+    """Tách cờ khỏi nội dung THÔ. Cờ đứng đâu cũng được; **xuống dòng giữ nguyên**.
+
+    Nhận cả phần sau tên lệnh chứ không nhận `context.args`: xem điểm cuối docstring
+    module. Cắt cờ ra rồi chỉ dọn khoảng trắng **cuối mỗi dòng** — vừa đủ để chỗ vừa cắt
+    không để lại vệt trắng, vừa không đụng tới bố cục nhiều dòng admin đã dán vào.
 
     Cờ lạ bị **từ chối** thay vì coi là nội dung: gõ nhầm `--al` mà bot lặng lẽ gửi chuỗi
     đó kèm tin nhắn cho tệp hẹp là hai lỗi cùng lúc — sai tệp và sai nội dung.
 
     Ném:
-        BroadcastArgError: thiếu nội dung, hoặc gặp cờ không hiểu.
+        BroadcastArgError: thiếu nội dung, gặp cờ không hiểu, hoặc nội dung quá dài.
     """
     audience = "active_30d"
     force_small = False
-    words: list[str] = []
 
-    for token in args:
-        if not token.startswith("--"):
-            words.append(token)
-            continue
+    pieces: list[str] = []
+    cut = 0
+    for matched in _FLAG_RE.finditer(raw):
+        token = matched.group()
         if token == FLAG_ALL:
             audience = "all"
         elif token == FLAG_FORCE_SMALL:
@@ -204,10 +226,20 @@ def parse_broadcast_args(args: list[str]) -> BroadcastArgs:
             raise BroadcastArgError(
                 f"Cờ không hiểu: {token} (chỉ có {FLAG_ALL}, {FLAG_FORCE_SMALL})"
             )
+        pieces.append(raw[cut : matched.start()])
+        cut = matched.end()
+    pieces.append(raw[cut:])
 
-    content = " ".join(words).strip()
+    content = "\n".join(line.rstrip() for line in "".join(pieces).splitlines()).strip()
     if not content:
         raise BroadcastArgError("Thiếu nội dung tin nhắn.")
+    if len(content) > MAX_CONTENT_CHARS:
+        raise BroadcastArgError(
+            f"Nội dung dài {texts.format_vnd(len(content))} ký tự, vượt mức an toàn "
+            f"{texts.format_vnd(MAX_CONTENT_CHARS)} (trần cứng của Telegram là 4.096). "
+            "Telegram sẽ từ chối cả tin và đợt chạy hết mà không ai nhận được gì — "
+            "hãy rút ngắn hoặc tách thành nhiều đợt."
+        )
     return BroadcastArgs(content=content, audience=audience, force_small=force_small)
 
 
@@ -247,7 +279,7 @@ def render_preview(*, job_id: int, args: BroadcastArgs, total: int) -> str:
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Dựng đợt ở trạng thái `draft`, chọn đích, in bản xem thử. **Không gửi gì.**"""
     try:
-        args = parse_broadcast_args(_args(context))
+        args = parse_broadcast_args(raw_argument(update))
     except BroadcastArgError as exc:
         await _reply(update, context, f"⚠️ {exc.hint}\n\n{USAGE}")
         return
@@ -567,6 +599,7 @@ CALLBACK_PATTERN: Final = r"^bc_(confirm|cancel)_\d+$"
 __all__ = [
     "CALLBACK_PATTERN",
     "COMMANDS",
+    "MAX_CONTENT_CHARS",
     "MIN_AUDIENCE_KEY",
     "USAGE",
     "BroadcastArgError",

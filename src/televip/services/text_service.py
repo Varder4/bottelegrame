@@ -615,6 +615,12 @@ _SPECS: Final[tuple[TemplateSpec, ...]] = (
         game_link="https://televip.game",
     ),
     _spec(
+        "event.box_budget_capped",
+        "Đập hộp — đợt đã chạm trần ngân sách",
+        _tmpl(texts.event_box_budget_capped(_GAME), (_GAME, "{game_link}")),
+        game_link="https://televip.game",
+    ),
+    _spec(
         "event.share_default",
         "Nội dung mặc định của event chia sẻ",
         _tmpl(
