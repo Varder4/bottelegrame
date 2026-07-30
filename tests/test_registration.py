@@ -239,3 +239,69 @@ async def test_job_lam_moi_thong_ke_ghi_that_vao_bang(wired_db) -> None:
 
 async def test_job_don_ma_giu_cho_chay_duoc_khi_khong_co_gi_de_don(wired_db) -> None:
     await main.job_reap_reservations(None)  # type: ignore[arg-type]
+
+
+# ── Lệnh được cấp quyền phải có handler ─────────────────────────────
+
+#: Lệnh đã có dòng quyền trong migration `0003` nhưng **chưa được xây**. Danh sách này là
+#: một bản khai nợ, không phải một chỗ để giấu lệnh hỏng: `/help_admin` sinh từ
+#: `admin_permissions`, nên mọi lệnh ở đây đang được quảng cáo với admin trong khi gõ vào
+#: thì không có gì xảy ra. Xây xong một lệnh thì XOÁ nó khỏi đây — nếu quên xoá, bài kiểm
+#: dưới sẽ đỏ và nhắc.
+CHUA_XAY: frozenset[str] = frozenset(
+    {
+        "/baocao",  # cần lớp báo cáo tổng hợp
+        "/checkip",  # cần lớp chống gian lận (GĐ4B): signal_owners, risk_assessments
+        "/chiendich",
+        "/done_event",
+        "/show_share_event",
+        "/update_share_event",
+    }
+)
+
+
+def _lenh_duoc_cap_quyen() -> set[str]:
+    """Mọi lệnh được cấp quyền, gom từ TẤT CẢ migration.
+
+    Không đọc từ database: bảng `admin_permissions` bị `TRUNCATE` giữa các test, nên đọc
+    ở đó thì kết quả phụ thuộc bài nào chạy trước. Không chỉ đọc `0003`: `0005` nạp quyền
+    của bốn lệnh câu chữ và `0006` nạp `/broadcast_cancel` — bỏ sót chúng thì bài kiểm này
+    tố cáo nhầm những lệnh hoàn toàn lành lặn.
+    """
+    import re
+    from pathlib import Path
+
+    versions = Path(main.__file__).resolve().parents[3] / "televip" / "db" / "migrations"
+    lenh: set[str] = set()
+    for path in sorted((versions / "versions").glob("*.py")):
+        src = path.read_text(encoding="utf-8")
+        if "admin_permissions" not in src:
+            continue
+        lenh |= set(re.findall(r"""["'](/[a-z_]+)["']""", src))
+    return lenh
+
+
+def test_moi_lenh_duoc_cap_quyen_deu_co_handler() -> None:
+    """Quyền có mà handler không có = một lệnh chết được quảng cáo là đang sống.
+
+    Đây là lỗi không bao giờ thành traceback: admin gõ lệnh, Telegram không giao cho ai,
+    bot im lặng. Người gõ kết luận "bot hỏng" và đi sửa thẳng database — đúng thứ mà cả
+    khối lệnh admin được viết ra để không còn phải làm.
+    """
+    co_handler = {f"/{name}" for name, _ in main.admin_command_handlers()}
+    thieu = _lenh_duoc_cap_quyen() - co_handler - CHUA_XAY
+    assert thieu == set(), f"có quyền nhưng không có handler: {sorted(thieu)}"
+
+
+def test_ban_khai_no_khong_con_thua_dong_nao() -> None:
+    """Xây xong mà quên xoá khỏi `CHUA_XAY` thì bài kiểm trên ngừng bảo vệ lệnh đó."""
+    co_handler = {f"/{name}" for name, _ in main.admin_command_handlers()}
+    da_xay = CHUA_XAY & co_handler
+    assert da_xay == set(), f"đã có handler, phải xoá khỏi CHUA_XAY: {sorted(da_xay)}"
+
+
+def test_khong_handler_nao_chay_ma_khong_co_quyen() -> None:
+    """Chiều ngược lại: handler không có dòng quyền thì KHÔNG AI gõ được, kể cả owner."""
+    co_handler = {f"/{name}" for name, _ in main.admin_command_handlers()}
+    thua = co_handler - _lenh_duoc_cap_quyen()
+    assert thua == set(), f"có handler nhưng không ai được cấp quyền: {sorted(thua)}"

@@ -689,3 +689,98 @@ def test_render_value_chi_nhom_hang_nghin_cho_tien():
     assert ops.render_value(10_000, "money_vnd") == "10.000đ"
     assert ops.render_value(3_600, "seconds") == "3600"
     assert ops.render_value(True, "bool") == "true"
+
+
+# ── /users ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_users_liet_ke_nguoi_moi_nhat_truoc(wired):
+    await make_admin(OWNER_ID, "owner", ("/users",))
+    for i in range(3):
+        await make_user(880_000 + i, username=f"nguoi{i}")
+    # Ép thứ tự vào bot, không trông cậy vào độ phân giải của `now()`.
+    for i in range(3):
+        await run_sql(
+            "UPDATE users SET joined_at = now() - make_interval(mins => :m) WHERE user_id = :uid",
+            {"m": i * 10, "uid": 880_000 + i},
+        )
+
+    sender = FakeSender()
+    await ops.cmd_users(make_update(OWNER_ID), make_context(sender))
+
+    body = sender.all_text
+    assert "@nguoi0" in body and "@nguoi2" in body
+    assert body.index("@nguoi0") < body.index("@nguoi2"), "phải sắp người mới nhất lên trước"
+
+
+@pytest.mark.asyncio
+async def test_users_danh_dau_da_xac_minh_va_dang_bi_khoa(wired):
+    await make_admin(OWNER_ID, "owner", ("/users",))
+    await make_user(881_001, username="daxacminh")
+    await make_user(881_002, username="bikhoa")
+    await run_sql("UPDATE users SET verified_at = now() WHERE user_id = 881001")
+    await run_sql(
+        "INSERT INTO user_bans (user_id, reason, banned_by) VALUES (881002, 'thu', :a)",
+        {"a": OWNER_ID},
+    )
+
+    sender = FakeSender()
+    await ops.cmd_users(make_update(OWNER_ID), make_context(sender))
+
+    body = sender.all_text
+    assert "✅ @daxacminh" in body
+    assert "🚫 @bikhoa" in body
+
+
+@pytest.mark.asyncio
+async def test_users_ep_tran_de_khong_keo_ca_bang(wired):
+    await make_admin(OWNER_ID, "owner", ("/users",))
+    for i in range(5):
+        await make_user(882_000 + i)
+
+    sender = FakeSender()
+    await ops.cmd_users(make_update(OWNER_ID), make_context(sender, str(ops.USERS_MAX + 500)))
+
+    # Tiêu đề nói đúng số dòng THẬT chứ không nói con số admin gõ vào (5 người + owner).
+    tong = await scalar("SELECT count(*) FROM users")
+    assert f"{tong} NGƯỜI DÙNG MỚI NHẤT" in sender.all_text
+
+
+@pytest.mark.asyncio
+async def test_users_tu_choi_tham_so_khong_phai_so(wired):
+    await make_admin(OWNER_ID, "owner", ("/users",))
+    sender = FakeSender()
+    await ops.cmd_users(make_update(OWNER_ID), make_context(sender, "abc"))
+    assert "Cú pháp" in sender.last
+
+
+# ── /huongdan ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_huongdan_gui_du_ba_phan(wired):
+    await make_admin(OWNER_ID, "owner", ("/huongdan",))
+
+    sender = FakeSender()
+    await ops.cmd_huongdan(make_update(OWNER_ID), make_context(sender))
+
+    assert len(sender.messages) == 3, "ba phần phải là ba tin — gộp lại là phần cuối bị nuốt"
+    for i, body in enumerate(sender.messages, start=1):
+        assert f"({i}/3)" in body
+        assert len(body) < 4096, "một phần vượt trần một tin Telegram"
+
+
+@pytest.mark.asyncio
+async def test_huongdan_lay_cau_chu_tu_ban_admin_da_sua(wired):
+    """Nội dung vận hành đổi theo cách vận hành, nên nó phải sửa được không cần deploy."""
+    from televip.services import text_service
+
+    await make_admin(OWNER_ID, "owner", ("/huongdan",))
+    await text_service.set_content("guide.codes", "BẢN NỘI BỘ MỚI", updated_by=OWNER_ID)
+
+    sender = FakeSender()
+    await ops.cmd_huongdan(make_update(OWNER_ID), make_context(sender))
+
+    assert sender.messages[0] == "BẢN NỘI BỘ MỚI"
+    assert "(2/3)" in sender.messages[1], "hai phần còn lại vẫn là bản mặc định"

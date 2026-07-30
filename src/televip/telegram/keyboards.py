@@ -228,3 +228,23 @@ def share_event_keyboard(share_link: str, support_link: str) -> InlineKeyboardMa
             [InlineKeyboardButton(BTN_SHARED_CONTACT_CSKH, url=support_link)],
         ]
     )
+
+
+def confirm_keyboard(
+    *, ok_data: str, cancel_data: str, ok_label: str, cancel_label: str
+) -> InlineKeyboardMarkup:
+    """Cặp nút xác nhận / huỷ cho một lệnh admin phá huỷ.
+
+    Nhãn và `callback_data` do nơi gọi truyền vào chứ không cố định ở đây: mỗi lệnh cần
+    tiền tố callback RIÊNG để lớp phân giải gác đúng quyền của lệnh đó. Dùng chung một
+    tiền tố nghĩa là nút xác nhận của lệnh chỉ-owner có thể bị bấm bởi người chỉ có quyền
+    của lệnh kia.
+    """
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(ok_label, callback_data=ok_data),
+                InlineKeyboardButton(cancel_label, callback_data=cancel_data),
+            ]
+        ]
+    )

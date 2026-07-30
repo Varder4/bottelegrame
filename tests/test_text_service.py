@@ -195,6 +195,9 @@ FUNCTION_TO_KEY: dict[str, str] = {
     "share_status_line": "share.status_waiting",
     "rate_limited": "error.rate_limited",
     "system_busy": "error.system_busy",
+    "guide_codes": "guide.codes",
+    "guide_broadcast": "guide.broadcast",
+    "guide_config": "guide.config",
 }
 
 #: Hàm KHÔNG phải câu chữ mà là quy tắc dựng chuỗi — cố ý không cho admin sửa.

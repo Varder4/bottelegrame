@@ -130,6 +130,7 @@ CALLBACK_HANDLERS: tuple[tuple[str, str], ...] = (
         f"{_ADMIN_PKG}.broadcast:handle_broadcast_callback",
     ),
     (admin_event.CALLBACK_PATTERN, f"{_ADMIN_PKG}.event:handle_send_event_callback"),
+    (admin_codes.DEL_ALL_CALLBACK_PATTERN, f"{_ADMIN_PKG}.codes:handle_del_all_callback"),
 )
 
 #: Menu lệnh cho người dùng thường (13-dac-ta §13.3.2). Lệnh admin KHÔNG nằm ở đây —

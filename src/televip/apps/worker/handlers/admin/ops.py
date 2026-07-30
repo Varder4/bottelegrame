@@ -8,6 +8,8 @@
     /unban <id>               gỡ ban
     /admin_add <id> <vai trò> quản lý danh bạ admin
     /admin_del <id>
+    /users [n]                người dùng mới nhất (mặc định 30)
+    /huongdan                 hướng dẫn vận hành, ba tin
     /help_admin               lệnh mà CHÍNH người gọi được phép chạy
 
 Bốn điều chi phối cả file:
@@ -44,7 +46,7 @@ from televip.core.logging import get_logger
 from televip.db.engine import session, transaction
 from televip.domain import texts
 from televip.services import admin as admin_service
-from televip.services import settings_service
+from televip.services import settings_service, text_service
 
 log = get_logger(__name__)
 
@@ -842,6 +844,92 @@ async def cmd_admin_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+# ── /users ──────────────────────────────────────────────────────────
+
+#: Mặc định của `/users` theo §13.4.2 mục 6. Trần cứng để một cú `/users 100000` không
+#: kéo cả bảng lên rồi cắt bỏ ở tầng hiển thị — công việc nặng nhất nằm ở truy vấn.
+USERS_DEFAULT: Final = 30
+USERS_MAX: Final = 100
+
+_SQL_USERS_RECENT = """
+SELECT u.user_id, u.username, u.full_name, u.joined_at, u.verified_at,
+       (b.user_id IS NOT NULL) AS dang_khoa
+  FROM users u
+  LEFT JOIN user_bans b ON b.user_id = u.user_id AND b.unbanned_at IS NULL
+ ORDER BY u.joined_at DESC
+ LIMIT :lim
+"""
+
+_SQL_USERS_TOTAL = """
+SELECT count(*)                                              AS tong,
+       count(*) FILTER (WHERE verified_at IS NOT NULL)       AS da_xac_minh,
+       count(*) FILTER (WHERE joined_at >= now() - interval '24 hours') AS moi_24h
+  FROM users
+"""
+
+
+@admin_command("/users", mutates=False)
+async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Danh sách người dùng mới nhất — §13.4.2 mục 6.
+
+    Sắp theo `joined_at DESC` chứ không theo `last_active`: câu hỏi mà lệnh này trả lời là
+    "ai vừa vào", và một tài khoản cũ mở lại bot không phải người mới. `/user <id>` là chỗ
+    xem một người cụ thể.
+    """
+    args = _args(context)
+    limit = USERS_DEFAULT
+    if args:
+        if not args[0].isdigit() or int(args[0]) == 0:
+            await _reply(
+                update,
+                context,
+                f"⚠️ Cú pháp: /users [n]   (n là số nguyên dương, mặc định {USERS_DEFAULT}, "
+                f"tối đa {USERS_MAX})",
+            )
+            return
+        limit = min(int(args[0]), USERS_MAX)
+
+    async with session() as db:
+        tong = (await db.execute(text(_SQL_USERS_TOTAL))).one()
+        rows = (await db.execute(text(_SQL_USERS_RECENT), {"lim": limit})).all()
+
+    lines = [
+        f"{'🚫' if row.dang_khoa else ('✅' if row.verified_at is not None else '⬜')} "
+        f"{texts.display_name(row.username, row.full_name)} ({row.user_id}) "
+        f"· {_vn_time(row.joined_at)}"
+        for row in rows
+    ]
+    await _reply_lines(
+        update,
+        context,
+        (
+            f"👥 {len(rows)} NGƯỜI DÙNG MỚI NHẤT\n"
+            f"📊 Tổng {tong.tong:,} · đã xác minh {tong.da_xac_minh:,} · "
+            f"vào trong 24h {tong.moi_24h:,}"
+        ),
+        lines or ["(chưa có người dùng nào)"],
+        footer="✅ đã xác minh · ⬜ chưa · 🚫 đang bị khoá",
+    )
+
+
+# ── /huongdan ───────────────────────────────────────────────────────
+
+#: Ba phần của `/huongdan`, gửi thành ba tin (§13.4.2 mục 15). Là **khoá câu chữ** chứ
+#: không phải chuỗi cứng: đây chính là loại nội dung admin muốn sửa mà không nhờ ai deploy.
+GUIDE_KEYS: Final[tuple[str, ...]] = ("guide.codes", "guide.broadcast", "guide.config")
+
+
+@admin_command("/huongdan", mutates=False)
+async def cmd_huongdan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hướng dẫn vận hành, ba tin nhắn.
+
+    Ba tin riêng chứ không một tin dài: mỗi phần vốn đã sát trần 4.096 ký tự của Telegram,
+    và gộp lại thì phần cuối bị nuốt mất mà không báo lỗi gì.
+    """
+    for key in GUIDE_KEYS:
+        await _reply(update, context, await text_service.render(key))
+
+
 # ── /help_admin ─────────────────────────────────────────────────────
 
 
@@ -895,6 +983,8 @@ HANDLERS: Final[tuple[tuple[str, Any], ...]] = (
     ("admin_add", cmd_admin_add),
     ("admin_del", cmd_admin_del),
     ("help_admin", cmd_help_admin),
+    ("users", cmd_users),
+    ("huongdan", cmd_huongdan),
 )
 
 
@@ -908,10 +998,12 @@ __all__ = [
     "cmd_ban",
     "cmd_cauhinh",
     "cmd_help_admin",
+    "cmd_huongdan",
     "cmd_setcauhinh",
     "cmd_stats",
     "cmd_unban",
     "cmd_user",
+    "cmd_users",
     "parse_setting_value",
     "render_value",
     "resolve_user",

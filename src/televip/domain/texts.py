@@ -1027,3 +1027,119 @@ def system_busy() -> str:
     cho người dùng và không tiết lộ chi tiết kỹ thuật.
     """
     return "⚠️ Hệ thống đang bận, vui lòng thử lại sau ít phút nhé!"
+
+
+# ── Hướng dẫn vận hành (/huongdan) ──────────────────────────────────
+#
+# Ba phần dưới đây là câu chữ cho ADMIN, không phải cho người dùng, nên chúng cố ý không
+# nằm chung khối với `help_text()`. Vẫn để ở đây — và vẫn có khoá câu chữ — vì đây đúng
+# là loại nội dung thay đổi theo cách vận hành chứ không theo code: quy ước đặt tên lô
+# code, giờ bắn tin, ai được gọi khi hết kho. Sửa những thứ đó không nên cần một lần deploy.
+
+
+def guide_codes() -> str:
+    """Phần 1 — kho code."""
+    return (
+        "📖 HƯỚNG DẪN VẬN HÀNH (1/3) — KHO CODE\n"
+        "\n"
+        f"{SEP}\n"
+        "\n"
+        "📦 NẠP CODE\n"
+        "/add_giffcode <loại> <mệnh giá> MA1 MA2 MA3\n"
+        "Ví dụ: /add_giffcode tanthu 10k TV001 TV002\n"
+        "\n"
+        "• Mã trùng bị BỎ QUA, không ghi đè — nạp lại cùng một file là an toàn.\n"
+        "• Lô vượt ngưỡng duyệt hai người sẽ bị TỪ CHỐI; chia nhỏ lô rồi nạp lại.\n"
+        "\n"
+        "📊 XEM KHO\n"
+        "/tonkho        tồn theo từng loại × từng mệnh giá + dự báo còn đủ mấy ngày\n"
+        "/codes         20 mã chưa dùng gần nhất\n"
+        "/codes used    20 mã đã phát gần nhất, kèm ai nhận và lúc nào\n"
+        "\n"
+        "🗑 THU HỒI\n"
+        "/del_code MA123              thu hồi MỘT mã chưa phát\n"
+        "/del_all_code <loại> [giá]   thu hồi TOÀN BỘ mã chưa phát của một loại\n"
+        "\n"
+        "⚠️ Mã ĐÃ PHÁT không thu hồi được bằng hai lệnh trên. Đó không phải giới hạn kỹ\n"
+        "thuật mà là chủ ý: mã đã vào sổ cái thì gỡ nó là một bút toán ngược, và xoá thẳng\n"
+        "hàng dữ liệu sẽ làm mất bằng chứng ai đã nhận gì.\n"
+        "\n"
+        "🔁 PHÁT BÙ\n"
+        "/resend_tanthu [@user|id]\n"
+        "Gửi lại ĐÚNG mã đã cấp cho người đủ điều kiện nhưng lúc đó kho rỗng. Lệnh này\n"
+        "KHÔNG cấp mã mới — nếu nó cấp mã mới thì một người sẽ ôm nhiều mã."
+    )
+
+
+def guide_broadcast() -> str:
+    """Phần 2 — bắn tin và event."""
+    return (
+        "📖 HƯỚNG DẪN VẬN HÀNH (2/3) — BẮN TIN & EVENT\n"
+        "\n"
+        f"{SEP}\n"
+        "\n"
+        "📣 BẮN TIN\n"
+        "/broadcast <nội dung>          tệp 30 ngày (mặc định)\n"
+        "/broadcast <nội dung> --all    TOÀN BỘ người dùng\n"
+        "\n"
+        "• Gõ lệnh KHÔNG gửi gì cả. Bạn sẽ thấy bản xem thử + số đích thật, rồi phải bấm\n"
+        "  xác nhận. Đây là cái chặn giữa một lần gõ nhầm và vài chục nghìn tin nhắn.\n"
+        "• Xuống dòng trong nội dung được giữ nguyên.\n"
+        "\n"
+        "/broadcast_status <job_id>   tiến độ\n"
+        "/broadcast_pause <job_id>    tạm dừng\n"
+        "/broadcast_resume <job_id>   chạy tiếp — tiếp TỪ CHỖ DỪNG, không gửi lại từ đầu\n"
+        "\n"
+        "🎁 EVENT ĐẬP HỘP\n"
+        "/send_event [lời dẫn] [--all]\n"
+        "\n"
+        "• Khối tỉ lệ LUÔN sinh từ settings.event.prize_table — không gõ tay được bộ số\n"
+        "  khác vào tin gửi đi.\n"
+        "• Thiếu mệnh giá trong kho thì lệnh TỪ CHỐI CHẠY. Quảng cáo giải 88K khi kho 88K\n"
+        "  rỗng là hứa suông với người dùng.\n"
+        "• Cửa sổ trúng thưởng tính từ lúc TỪNG người nhận được tin, không từ lúc bấm nút.\n"
+        "\n"
+        "📤 EVENT CHIA SẺ\n"
+        "/update_share_event   reply một ảnh kèm caption để đặt bài chia sẻ\n"
+        "/show_share_event     xem đúng thứ người dùng đang thấy\n"
+        "/done_event <@user>   trao code sau khi đã xác minh bài share"
+    )
+
+
+def guide_config() -> str:
+    """Phần 3 — cấu hình, quyền, và việc phải làm khi có sự cố."""
+    return (
+        "📖 HƯỚNG DẪN VẬN HÀNH (3/3) — CẤU HÌNH & SỰ CỐ\n"
+        "\n"
+        f"{SEP}\n"
+        "\n"
+        "⚙️ THAM SỐ\n"
+        "/cauhinh [tiền_tố]        xem tham số đang chạy\n"
+        "/setcauhinh <khoá> <giá>  đổi NÓNG, không cần restart\n"
+        "\n"
+        "Mỗi lần đổi để lại dấu vết ai đổi, lúc nào, từ giá trị nào sang giá trị nào.\n"
+        "Không sửa file trên máy chủ — sửa ở đó thì không ai trả lời được câu hỏi trên.\n"
+        "\n"
+        "✍️ CÂU CHỮ\n"
+        "/noidung [tiền_tố]        danh sách tin nhắn sửa được\n"
+        "/xemnoidung <khoá>        xem bản đang chạy + biến bắt buộc\n"
+        "/suanoidung <khoá> <nội dung>\n"
+        "/resetnoidung <khoá>      về bản mặc định\n"
+        "\n"
+        # `{{…}}` là ngoặc thoát của `str.format`: chuỗi này là MẪU đi qua `text_service`,
+        # nên một cặp ngoặc đơn ở đây sẽ bị đọc thành biến bắt buộc tên `code_value`.
+        "⚠️ Thiếu một biến bắt buộc thì lệnh sửa BỊ TỪ CHỐI và nội dung không đổi. Xoá\n"
+        "{{code_value}} khỏi tin trả code nghĩa là người dùng nhận một tin không có mã.\n"
+        "\n"
+        "👮 QUYỀN\n"
+        "/admin_add <id> <owner|admin|cskh|ketoan>\n"
+        "/admin_del <id>\n"
+        "/help_admin    các lệnh mà CHÍNH bạn được phép dùng\n"
+        "\n"
+        "🚨 KHI CÓ SỰ CỐ\n"
+        "• Hết code: bot tự cảnh báo vào nhóm admin. Nạp bằng /add_giffcode rồi\n"
+        "  /resend_tanthu để phát bù cho người đã xếp hàng.\n"
+        "• Bắn nhầm: /broadcast_pause NGAY. Đợt dừng tại chỗ, không mất tiến độ.\n"
+        "• Nghi gian lận: /user <id> xem hồ sơ, /ban <id> <lý do> để khoá.\n"
+        "  KHÔNG xoá tài khoản — xoá là mất luôn bằng chứng điều tra."
+    )

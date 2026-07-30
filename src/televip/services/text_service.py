@@ -719,6 +719,10 @@ _SPECS: Final[tuple[TemplateSpec, ...]] = (
         seconds=3,
     ),
     _spec("error.system_busy", "Hệ thống đang bận", texts.system_busy()),
+    # ── Hướng dẫn vận hành (/huongdan, chỉ admin đọc) ───────────────
+    _spec("guide.codes", "Hướng dẫn 1/3 — kho code", texts.guide_codes()),
+    _spec("guide.broadcast", "Hướng dẫn 2/3 — bắn tin & event", texts.guide_broadcast()),
+    _spec("guide.config", "Hướng dẫn 3/3 — cấu hình & sự cố", texts.guide_config()),
 )
 
 TEMPLATES: Final[dict[str, TemplateSpec]] = {spec.key: spec for spec in _SPECS}

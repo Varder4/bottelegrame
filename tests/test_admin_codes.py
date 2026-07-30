@@ -627,3 +627,158 @@ async def test_resend_khong_tim_thay_nguoi_dung(owner):
     sender = FakeSender()
     await admin_codes.handle_resend_tanthu(make_update(owner), make_context(sender, "@aokhongco"))
     assert "Không tìm thấy người dùng" in sender.last
+
+
+# ── 6. /del_all_code — thu hồi hàng loạt, hai bước ──────────────────
+
+
+class FakeQuery:
+    def __init__(self, data: str) -> None:
+        self.data = data
+
+
+def make_callback_update(user_id: int, data: str) -> Any:
+    update = make_update(user_id)
+    update.callback_query = FakeQuery(data)
+    return update
+
+
+class FakeSenderCB(FakeSender):
+    """`FakeSender` + `answer_callback` — nhánh callback bắt buộc phải gọi nó."""
+
+    def __init__(self, *, deliver: bool = True) -> None:
+        super().__init__(deliver=deliver)
+        self.answers: list[str] = []
+
+    async def answer_callback(self, query: Any, text: str = "", show_alert: bool = False) -> None:
+        self.answers.append(text)
+
+
+async def _du_kho(*, code_type: str, value_vnd: int, count: int, prefix: str) -> None:
+    async with db_session() as s:
+        await add_codes(s, code_type=code_type, value_vnd=value_vnd, count=count, prefix=prefix)
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_go_lenh_khong_xoa_gi_ca(owner):
+    """Bước một chỉ ĐẾM. Một lệnh chạm được cả kho thì bước xác nhận là hàng rào chính."""
+    await _du_kho(code_type="event", value_vnd=5_000, count=7, prefix="E5")
+
+    sender = FakeSender()
+    await admin_codes.handle_del_all_code(make_update(owner), make_context(sender, "event"))
+
+    assert "XÁC NHẬN" in sender.last
+    assert "7" in sender.last
+    assert await scalar("SELECT count(*) FROM codes WHERE status = 'available'") == 7, (
+        "gõ lệnh mà đã xoá — bước xác nhận là vô nghĩa"
+    )
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_xac_nhan_thi_thu_hoi_va_ghi_so(owner):
+    await _du_kho(code_type="event", value_vnd=5_000, count=4, prefix="E5")
+
+    sender = FakeSenderCB()
+    await admin_codes.handle_del_all_callback(
+        make_callback_update(owner, "dac_ok_event_0_4"), make_context(sender)
+    )
+
+    assert sender.answers, "callback không được trả lời — nút sẽ quay vòng"
+    assert "Đã thu hồi 4 mã" in sender.last
+    assert await scalar("SELECT count(*) FROM codes WHERE status = 'revoked'") == 4
+    assert await scalar("SELECT count(*) FROM codes") == 4, "phải là revoke, KHÔNG phải DELETE"
+    assert await scalar("SELECT count(*) FROM audit_log WHERE action = 'del_all_code'") == 1
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_khong_dung_toi_ma_da_phat(owner):
+    """Hàng rào đắt nhất của lệnh: mã đang thuộc về một người thật phải sống sót."""
+    await _du_kho(code_type="event", value_vnd=5_000, count=3, prefix="E5")
+    await run_sql("UPDATE codes SET status = 'issued' WHERE code_value = 'E5-event-1'")
+    await run_sql("UPDATE codes SET status = 'reserved' WHERE code_value = 'E5-event-2'")
+
+    sender = FakeSenderCB()
+    await admin_codes.handle_del_all_callback(
+        make_callback_update(owner, "dac_ok_event_0_1"), make_context(sender)
+    )
+
+    assert await code_status("E5-event-1") == "issued", "mã ĐÃ PHÁT bị đụng tới"
+    assert await code_status("E5-event-2") == "reserved", "mã đang giữ chỗ bị đụng tới"
+    assert await code_status("E5-event-3") == "revoked"
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_loc_dung_menh_gia(owner):
+    await _du_kho(code_type="event", value_vnd=5_000, count=2, prefix="E5")
+    await _du_kho(code_type="event", value_vnd=88_000, count=3, prefix="E88")
+
+    sender = FakeSenderCB()
+    await admin_codes.handle_del_all_callback(
+        make_callback_update(owner, "dac_ok_event_88000_3"), make_context(sender)
+    )
+
+    assert await scalar("SELECT count(*) FROM codes WHERE status = 'revoked'") == 3
+    assert await code_status("E5-event-1") == "available", "mệnh giá khác bị cuốn theo"
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_bao_khi_kho_doi_giua_hai_buoc(owner):
+    """Xem thử 5 mã, lúc bấm chỉ còn 2 — phải NÓI RA, không im lặng xoá con số khác."""
+    await _du_kho(code_type="event", value_vnd=5_000, count=2, prefix="E5")
+
+    sender = FakeSenderCB()
+    await admin_codes.handle_del_all_callback(
+        make_callback_update(owner, "dac_ok_event_0_5"), make_context(sender)
+    )
+
+    assert "Đã thu hồi 2 mã" in sender.last
+    assert "kho đã thay đổi" in sender.last
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_huy_thi_khong_dung_gi(owner):
+    await _du_kho(code_type="event", value_vnd=5_000, count=3, prefix="E5")
+
+    sender = FakeSenderCB()
+    await admin_codes.handle_del_all_callback(
+        make_callback_update(owner, "dac_no_event_0_3"), make_context(sender)
+    )
+
+    assert "Đã huỷ" in sender.last
+    assert await scalar("SELECT count(*) FROM codes WHERE status = 'available'") == 3
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_tu_choi_loai_khong_hop_le(owner):
+    sender = FakeSender()
+    await admin_codes.handle_del_all_code(make_update(owner), make_context(sender, "khonco"))
+    assert "không hợp lệ" in sender.last
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_tu_choi_khi_vuot_nguong_duyet_hai_nguoi(owner):
+    """Cùng hàng rào với `/add_giffcode`: luồng ký thứ hai chưa xây nên fail-closed."""
+    await set_setting("admin.dual_approval_threshold_vnd", 100_000, "money_vnd")
+    await _du_kho(code_type="event", value_vnd=88_000, count=5, prefix="E88")
+
+    sender = FakeSender()
+    await admin_codes.handle_del_all_code(make_update(owner), make_context(sender, "event"))
+
+    assert "vượt ngưỡng" in sender.last
+    assert await scalar("SELECT count(*) FROM codes WHERE status = 'available'") == 5
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_nguoi_khong_co_quyen_khong_bam_duoc_nut(wired):
+    """Nút phải được gác bằng CHÍNH quyền của lệnh, không phải chỉ ẩn đi."""
+    async with db_session() as s:
+        await make_user(s, OUTSIDER_ID)
+    await _du_kho(code_type="event", value_vnd=5_000, count=3, prefix="E5")
+
+    sender = FakeSenderCB()
+    await admin_codes.handle_del_all_callback(
+        make_callback_update(OUTSIDER_ID, "dac_ok_event_0_3"), make_context(sender)
+    )
+
+    assert sender.messages == []
+    assert await scalar("SELECT count(*) FROM codes WHERE status = 'available'") == 3
