@@ -225,6 +225,36 @@ class Sender:
             call, chat_id=chat_id, lane=lane, op="send_photo", idem_key=idem_key
         )
 
+    async def send_document(
+        self,
+        chat_id: int,
+        document: bytes,
+        *,
+        filename: str,
+        caption: str | None = None,
+        lane: Lane = "interactive",
+        idem_key: str | None = None,
+    ) -> int | None:
+        """Gửi một tệp dựng trong bộ nhớ (báo cáo CSV).
+
+        Khác `send_photo`, ở đây `bytes` là **đúng**: tệp báo cáo sinh ra cho một lần gõ
+        lệnh và không có `file_id` nào để dùng lại. Cũng vì vậy nó chỉ dành cho lane
+        `interactive` — không có đường nào để một tệp dựng tại chỗ đi vào đợt bắn hàng
+        loạt, và đó là điều nên giữ nguyên.
+        """
+
+        async def call() -> Message:
+            return await self._bot.send_document(
+                chat_id=chat_id,
+                document=document,
+                filename=filename,
+                caption=caption,
+            )
+
+        return await self._deliver(
+            call, chat_id=chat_id, lane=lane, op="send_document", idem_key=idem_key
+        )
+
     async def answer_callback(
         self,
         query: CallbackQuery,

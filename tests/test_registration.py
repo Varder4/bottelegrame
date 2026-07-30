@@ -250,9 +250,7 @@ async def test_job_don_ma_giu_cho_chay_duoc_khi_khong_co_gi_de_don(wired_db) -> 
 #: dưới sẽ đỏ và nhắc.
 CHUA_XAY: frozenset[str] = frozenset(
     {
-        "/baocao",  # cần lớp báo cáo tổng hợp
         "/checkip",  # cần lớp chống gian lận (GĐ4B): signal_owners, risk_assessments
-        "/chiendich",
     }
 )
 
