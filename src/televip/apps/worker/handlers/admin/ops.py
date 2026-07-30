@@ -879,7 +879,8 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = _args(context)
     limit = USERS_DEFAULT
     if args:
-        if not args[0].isdigit() or int(args[0]) == 0:
+        # `isdecimal` chứ không `isdigit`: `"²".isdigit()` là True nhưng `int("²")` ném.
+        if not args[0].isdecimal() or int(args[0]) == 0:
             await _reply(
                 update,
                 context,

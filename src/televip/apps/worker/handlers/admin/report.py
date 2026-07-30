@@ -91,17 +91,35 @@ SELECT
     WHERE state = 'delivered' AND delivered_at >= :tu AND delivered_at < :den) AS so_nguoi,
   (SELECT count(*)::int FROM users
     WHERE joined_at >= :tu AND joined_at < :den)                               AS user_moi,
+  -- Tử số phải cùng TỆP với mẫu số: người VÀO trong kỳ và đã xác minh. Đếm
+  -- `verified_at` trong kỳ là một tệp khác hẳn (gồm cả người vào từ tháng trước),
+  -- và tỉ lệ giữa hai tệp khác nhau in ra được những con số như 300%.
   (SELECT count(*)::int FROM users
-    WHERE verified_at >= :tu AND verified_at < :den)                           AS da_xac_minh
+    WHERE joined_at >= :tu AND joined_at < :den AND verified_at IS NOT NULL)   AS da_xac_minh,
+  -- Số lượt xác minh XẢY RA trong kỳ, bất kể vào từ bao giờ. Đây là con số vận hành
+  -- ("hôm nay có bao nhiêu người xác minh"), không phải tử số của tỉ lệ trên.
+  (SELECT count(*)::int FROM users
+    WHERE verified_at >= :tu AND verified_at < :den)                           AS xac_minh_trong_ky
 """
 
 #: Chi của các đợt event nằm TRONG kỳ. Trần ngân sách là trần MỖI ĐỢT, nên báo cáo phải
 #: tách được từng đợt chứ không chỉ đưa một con số gộp.
+#:
+#: Hai con số cho mỗi đợt, và chúng trả lời hai câu hỏi khác nhau:
+#: - `*_ky` — chi TRONG KỲ, cùng ranh giới với con số "💰 Đã chi" ở đầu báo cáo. Không
+#:   cùng ranh giới thì hai khối trên cùng một màn hình cộng ra hai tổng khác nhau và
+#:   không có gì trên đó giải thích tại sao.
+#: - `*_doi` — chi TRỌN ĐỜI của đợt, thứ phải đem so với trần ngân sách mỗi đợt. Một đợt
+#:   mở cuối kỳ trước, tiêu tiếp sang kỳ này, có phần trong kỳ nhỏ mà tổng đã sát trần.
 _SQL_EVENTS = """
 SELECT e.event_id,
        e.created_at,
-       count(g.grant_id)::int                  AS so_ma,
-       coalesce(sum(g.value_vnd), 0)::bigint   AS tong_vnd
+       count(g.grant_id) FILTER (
+         WHERE g.delivered_at >= :tu AND g.delivered_at < :den)::int          AS so_ma_ky,
+       coalesce(sum(g.value_vnd) FILTER (
+         WHERE g.delivered_at >= :tu AND g.delivered_at < :den), 0)::bigint   AS tong_vnd_ky,
+       count(g.grant_id)::int                                                 AS so_ma_doi,
+       coalesce(sum(g.value_vnd), 0)::bigint                                  AS tong_vnd_doi
   FROM events e
   LEFT JOIN event_participations p ON p.event_id = e.event_id
   LEFT JOIN code_grants g ON g.grant_id = p.code_grant_id AND g.state = 'delivered'
@@ -170,13 +188,16 @@ def render(report: Report) -> str:
         "",
         f"💰 Đã chi: {texts.format_vnd(tong.tong_vnd)}đ ({tong.so_ma:,} mã)",
         f"👤 Người nhận: {tong.so_nguoi:,}",
-        f"🆕 User mới: {tong.user_moi:,} · xác minh: {tong.da_xac_minh:,}",
+        f"🆕 User mới: {tong.user_moi:,} · lượt xác minh trong kỳ: {tong.xac_minh_trong_ky:,}",
     ]
 
     # Tỉ lệ chuyển đổi chỉ có nghĩa khi mẫu số khác 0. In "0%" cho một kỳ không có ai vào
     # là bịa ra một con số; nói thẳng "chưa có ai" thì đọc được.
     if tong.user_moi:
-        lines.append(f"📈 Vào → xác minh: {tong.da_xac_minh * 100 // tong.user_moi}%")
+        lines.append(
+            f"📈 Trong {tong.user_moi:,} người mới: {tong.da_xac_minh:,} đã xác minh "
+            f"({tong.da_xac_minh * 100 // tong.user_moi}%)"
+        )
 
     if report.dong:
         lines += ["", "🎁 CHI THEO LUỒNG:"]
@@ -188,10 +209,13 @@ def render(report: Report) -> str:
 
     if report.events:
         lines += ["", "📢 EVENT ĐẬP HỘP TRONG KỲ:"]
-        lines += [
-            f"• Event #{r.event_id}: {r.so_ma:,} mã = {texts.format_vnd(r.tong_vnd)}đ"
-            for r in report.events
-        ]
+        for r in report.events:
+            dong = f"• Event #{r.event_id}: {r.so_ma_ky:,} mã = {texts.format_vnd(r.tong_vnd_ky)}đ"
+            # Chỉ in tổng trọn đời khi nó KHÁC phần trong kỳ. In luôn hai con số bằng nhau
+            # ở mọi dòng là nhiễu; im lặng khi chúng khác nhau mới là chỗ mất tiền.
+            if r.tong_vnd_doi != r.tong_vnd_ky:
+                dong += f"  (trọn đợt: {texts.format_vnd(r.tong_vnd_doi)}đ)"
+            lines.append(dong)
 
     if not report.dong and not report.events:
         lines += ["", "(kỳ này chưa phát mã nào)"]
@@ -212,7 +236,12 @@ def to_csv(report: Report) -> bytes:
     for r in report.dong:
         writer.writerow([*khoang, "luong", r.grant_type, r.value_vnd, r.so_ma, r.tong_vnd])
     for r in report.events:
-        writer.writerow([*khoang, "event", f"event_{r.event_id}", "", r.so_ma, r.tong_vnd])
+        writer.writerow(
+            [*khoang, "event_trong_ky", f"event_{r.event_id}", "", r.so_ma_ky, r.tong_vnd_ky]
+        )
+        writer.writerow(
+            [*khoang, "event_tron_doi", f"event_{r.event_id}", "", r.so_ma_doi, r.tong_vnd_doi]
+        )
     return buf.getvalue().encode("utf-8-sig")
 
 

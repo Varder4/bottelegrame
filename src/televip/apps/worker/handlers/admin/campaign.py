@@ -89,6 +89,19 @@ SELECT campaign_id, code, name, starts_at, ends_at, is_active
 #: nghĩa là admin bấm "dừng", đọc được "đã dừng", mà van tiền vẫn mở.
 _SQL_END_ALL = "UPDATE campaigns SET is_active = false WHERE is_active RETURNING campaign_id"
 
+#: Khoá tư vấn xếp hàng các thao tác ĐỔI TRẠNG THÁI chiến dịch. Giữ tới hết giao dịch.
+#:
+#: Cần thiết vì `_SQL_END_ALL` không tự bảo vệ được: dưới READ COMMITTED, giao dịch của
+#: admin B chụp ảnh bảng TRƯỚC khi hàng mới của A tồn tại, nên nó không thể tắt hàng đó,
+#: rồi B chèn tiếp hàng của mình. Kết quả là **hai chiến dịch cùng bật**, và không lời
+#: đáp nào in ra "đã dừng N chiến dịch" nên không ai thấy. `campaign_window()` chỉ đọc
+#: `ORDER BY campaign_id DESC LIMIT 1`, nên hàng cũ trở thành đúng thứ mà docstring module
+#: này nói là không được phép tồn tại: bật nhưng vô hình.
+_SQL_LOCK = "SELECT pg_advisory_xact_lock(:ns, 0)"
+
+#: Không gian tên khoá của chiến dịch — khác `event_box` để hai thứ không xếp hàng sau nhau.
+_LOCK_NS_CAMPAIGN: Final = 0x4344  # "CD"
+
 #: `code` có `UNIQUE`, nên nó phải duy nhất **theo cấu trúc**, không theo may mắn. Một
 #: dấu thời gian tới giây thì hai lần bấm liên tiếp — chuyện admin làm thật khi tưởng lần
 #: đầu không ăn — nổ `UniqueViolation`, một lỗi không nhánh nào bắt.
@@ -135,7 +148,10 @@ def _args(context: ContextTypes.DEFAULT_TYPE) -> list[str]:
 
 def parse_days(raw: str) -> int | None:
     """Số ngày dương trong `[1, MAX_DAYS]`, hoặc `None`."""
-    if not raw.isdigit():
+    # `isdecimal`, KHÔNG phải `isdigit`: `"²".isdigit()` là True nhưng `int("²")` ném
+    # `ValueError` — một ngoại lệ không nhánh nào bắt, thoát khỏi handler và để admin
+    # không nhận được câu trả lời nào.
+    if not raw.isdecimal():
         return None
     days = int(raw)
     return days if 1 <= days <= MAX_DAYS else None
@@ -243,6 +259,9 @@ async def _start(sender: Any, chat_id: int, actor_id: int, rest: list[str]) -> N
     rule = await referral.params()
 
     async with transaction() as db:
+        # Xếp hàng TRƯỚC khi đọc bảng: xem chú thích `_SQL_LOCK`. Không có dòng này thì
+        # hai admin bấm cùng lúc để lại hai chiến dịch cùng bật, im lặng.
+        await db.execute(text(_SQL_LOCK), {"ns": _LOCK_NS_CAMPAIGN})
         # Dừng cái đang chạy TRƯỚC. `campaign_window()` lấy hàng `campaign_id` lớn nhất,
         # nên để hai hàng cùng bật thì hàng cũ thành vô hình mà vẫn nằm đó — một trạng
         # thái không ai đọc ra được từ `/chiendich`.
@@ -342,6 +361,9 @@ async def _extend(sender: Any, chat_id: int, actor_id: int, rest: list[str]) -> 
 
 async def _end(sender: Any, chat_id: int, actor_id: int) -> None:
     async with transaction() as db:
+        # Cùng khoá với `_start`: "dừng" chạy song song với "mở" mà không xếp hàng thì có
+        # thể dừng xong lại còn một hàng vừa được bật xen vào.
+        await db.execute(text(_SQL_LOCK), {"ns": _LOCK_NS_CAMPAIGN})
         stopped = (await db.execute(text(_SQL_END_ALL))).all()
         if stopped:
             await write_audit(

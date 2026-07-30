@@ -29,7 +29,9 @@ phản hồi nào** và sẽ dán lại lần nữa.
 
 from __future__ import annotations
 
+import json
 import re
+import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -41,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from televip.cache.client import get_redis
 from televip.core.clock import VN_TZ
 from televip.core.errors import ConfigError
 from televip.core.logging import get_logger
@@ -581,8 +584,15 @@ async def handle_codes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 CMD_DEL_ALL: Final = "/del_all_code"
 
 CB_DEL_ALL_PREFIX: Final = "dac_"
-DEL_ALL_CALLBACK_PATTERN: Final = r"^dac_(ok|no)_[a-z]+_\d+_\d+$"
-_CB_DEL_ALL_RE: Final = re.compile(r"^dac_(ok|no)_([a-z]+)_(\d+)_(\d+)$")
+DEL_ALL_CALLBACK_PATTERN: Final = r"^dac_(ok|no)_\d+_[A-Za-z0-9_-]{6,32}$"
+_CB_DEL_ALL_RE: Final = re.compile(r"^dac_(ok|no)_(\d+)_([A-Za-z0-9_-]{6,32})$")
+
+#: Tiền tố khoá Redis của một ĐỀ NGHỊ thu hồi đang chờ xác nhận.
+DEL_ALL_TICKET_PREFIX: Final = "dac:"
+
+#: Đề nghị sống 5 phút. Đủ để admin đọc con số rồi cân nhắc, ngắn hơn nhiều so với thời
+#: gian một tin nhắn Telegram còn nằm trong lịch sử chat — mà lịch sử chat là vĩnh viễn.
+DEL_ALL_TICKET_TTL_SECONDS: Final = 300
 
 DEL_ALL_USAGE = (
     "📥 CÁCH DÙNG\n"
@@ -620,20 +630,70 @@ RETURNING code_id, value_vnd
 """
 
 
-def _del_all_keyboard(code_type: str, value_vnd: int, so_ma: int) -> Any:
-    """Hai nút, mang theo ĐÚNG phạm vi vừa đếm.
+def _ticket_key(ticket: str) -> str:
+    return f"{DEL_ALL_TICKET_PREFIX}{ticket}"
 
-    `so_ma` nằm trong `callback_data` để lúc bấm còn so lại được: kho là thứ đang chạy,
-    một lượt nạp hoặc một lượt phát xen vào giữa hai bước làm phạm vi khác đi, và xoá một
-    phạm vi khác với phạm vi đã hiện ra là đúng nghĩa xoá nhầm.
+
+async def _issue_ticket(*, actor_id: int, code_type: str, value_vnd: int, so_ma: int) -> str:
+    """Ghi một ĐỀ NGHỊ thu hồi vào Redis, trả về vé dùng MỘT LẦN.
+
+    Đây là chỗ vá lỗ hổng nặng nhất của lệnh này. Bản trước nhét thẳng *phạm vi*
+    (`loại_mệnhgiá_sốmã`) vào `callback_data`, nên cái nút là một **mệnh lệnh vĩnh viễn**
+    chứ không phải một quyết định: tin nhắn Telegram sống mãi trong lịch sử chat, và bấm
+    lại nó vài ngày sau sẽ chạy `UPDATE` trên kho của HÔM NAY. Kịch bản đã dựng lại được:
+    đề nghị lúc kho có 1 mã 5.000đ → hôm sau nạp 200 mã 88.000đ → lệnh gõ tay bị từ chối
+    vì vượt trần duyệt hai người, nhưng cuộn lên bấm nút cũ thì thu hồi sạch 17.605.000đ.
+
+    Vé một lần khiến nút cũ thành vô hại: hết hạn hoặc đã bấm thì `GETDEL` trả rỗng và
+    lệnh không làm gì cả — cùng tư thế với `bc_confirm_<job_id>` / `ev_confirm_<job_id>`,
+    hai nút xác nhận kia neo vào một đối tượng database và trở thành no-op khi đối tượng
+    đó rời trạng thái `draft`.
     """
-    hau_to = f"{code_type}_{value_vnd}_{so_ma}"
+    ticket = secrets.token_urlsafe(8)
+    await get_redis().set(
+        _ticket_key(ticket),
+        json.dumps(
+            {"actor_id": actor_id, "code_type": code_type, "value_vnd": value_vnd, "so_ma": so_ma}
+        ).encode(),
+        ex=DEL_ALL_TICKET_TTL_SECONDS,
+    )
+    return ticket
+
+
+async def _claim_ticket(ticket: str) -> dict[str, Any] | None:
+    """Đọc VÀ xoá đề nghị trong một lệnh. `None` = hết hạn, hoặc đã có người bấm."""
+    raw = await get_redis().getdel(_ticket_key(ticket))
+    if raw is None:
+        return None
+    try:
+        return dict(json.loads(raw))
+    except (ValueError, TypeError):
+        return None
+
+
+def _del_all_keyboard(actor_id: int, ticket: str) -> Any:
+    """Hai nút neo vào MỘT đề nghị cụ thể và MỘT người cụ thể.
+
+    `actor_id` nằm trong `callback_data` để kiểm được **trước** khi tiêu vé: người khác
+    bấm nhầm nút của đồng nghiệp thì bị từ chối mà không đốt mất đề nghị của người ta.
+    """
+    hau_to = f"{actor_id}_{ticket}"
     return keyboards.confirm_keyboard(
         ok_data=f"{CB_DEL_ALL_PREFIX}ok_{hau_to}",
         cancel_data=f"{CB_DEL_ALL_PREFIX}no_{hau_to}",
         ok_label="🗑 XOÁ NGAY",
         cancel_label="🛑 HUỶ",
     )
+
+
+async def _du_nguong(tong_vnd: int) -> int | None:
+    """Ngưỡng duyệt hai người nếu `tong_vnd` vượt, `None` nếu trong ngưỡng.
+
+    Đọc ở CẢ hai bước — lúc gõ lệnh và lúc bấm nút. Chỉ kiểm ở bước gõ thì cái nút trở
+    thành đường vòng qua chính hàng rào đó.
+    """
+    threshold = await settings_service.get_int("admin.dual_approval_threshold_vnd", 1_000_000)
+    return threshold if tong_vnd > threshold else None
 
 
 @admin_command(CMD_DEL_ALL)
@@ -692,8 +752,8 @@ async def handle_del_all_code(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Cùng hàng rào với `/add_giffcode`: thu hồi cũng là một hành động chạm vào nghĩa vụ
     # tiền, và luồng ký thứ hai chưa được xây nên ở đây fail-closed.
-    threshold = await settings_service.get_int("admin.dual_approval_threshold_vnd", 1_000_000)
-    if row.tong_vnd > threshold:
+    threshold = await _du_nguong(row.tong_vnd)
+    if threshold is not None:
         await sender.send_message(
             chat_id,
             f"⛔ Phạm vi này trị giá {texts.format_vnd(row.tong_vnd)}đ ({row.so_ma:,} mã), "
@@ -711,6 +771,9 @@ async def handle_del_all_code(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    ticket = await _issue_ticket(
+        actor_id=tg_user.id, code_type=code_type, value_vnd=value_vnd, so_ma=row.so_ma
+    )
     await sender.send_message(
         chat_id,
         (
@@ -721,9 +784,12 @@ async def handle_del_all_code(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"💰 Tổng giá trị: {texts.format_vnd(row.tong_vnd)}đ\n"
             f"\n"
             "Mã đã phát cho người dùng KHÔNG nằm trong số này và không bị đụng tới.\n"
-            "Mã bị thu hồi chuyển trạng thái `revoked`, hàng dữ liệu vẫn còn để đối soát."
+            "Mã bị thu hồi chuyển trạng thái `revoked`, hàng dữ liệu vẫn còn để đối soát.\n"
+            f"\n"
+            f"⏳ Đề nghị này hết hạn sau {DEL_ALL_TICKET_TTL_SECONDS // 60} phút, và chỉ bấm "
+            f"được MỘT lần."
         ),
-        reply_markup=_del_all_keyboard(code_type, value_vnd, row.so_ma),
+        reply_markup=_del_all_keyboard(tg_user.id, ticket),
     )
     log.info(
         "xoa_hang_loat_cho_xac_nhan",
@@ -734,9 +800,24 @@ async def handle_del_all_code(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-@admin_command(CMD_DEL_ALL)
 async def handle_del_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Nút xác nhận / huỷ của `/del_all_code`.
+    """Vỏ ngoài của hai nút: **trả lời callback trước, kiểm quyền sau**.
+
+    Cùng tư thế với `/broadcast` và `/send_event`, và cùng một lý do: `@admin_command`
+    trả về IM LẶNG khi từ chối, nên đặt nó ở ngoài cùng khiến người không có quyền bấm
+    vào một nút quay vòng tới khi Telegram tự huỷ — đúng hành vi §13.3.3 cấm. Lưới an
+    toàn callback của `main.py` không cứu được: mẫu `dac_` đã khớp mất rồi.
+    """
+    query = update.callback_query
+    if query is None:
+        return
+    await context.application.bot_data["sender"].answer_callback(query)
+    await _del_all_dispatch(update, context)
+
+
+@admin_command(CMD_DEL_ALL)
+async def _del_all_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Thực thi nút xác nhận / huỷ.
 
     Gác bằng **cùng một quyền** với lệnh: nút này thực thi việc mà lệnh chỉ mới đề nghị,
     nên ai không gõ được lệnh cũng không được bấm nút của nó.
@@ -750,19 +831,71 @@ async def handle_del_all_callback(update: Update, context: ContextTypes.DEFAULT_
 
     matched = _CB_DEL_ALL_RE.match(query.data or "")
     if matched is None:
-        await sender.answer_callback(query)
         return
 
-    hanh_dong, code_type, raw_value, raw_count = matched.groups()
-    value_vnd, so_ma_da_hien = int(raw_value), int(raw_count)
+    hanh_dong, raw_actor, ticket = matched.groups()
+
+    # Kiểm người bấm TRƯỚC khi tiêu vé: bấm nhầm nút của đồng nghiệp không được phép đốt
+    # mất đề nghị của người ta.
+    if int(raw_actor) != tg_user.id:
+        await sender.send_message(
+            chat_id,
+            "⚠️ Đây là đề nghị thu hồi của admin khác — chỉ người tạo mới bấm được.\n\n"
+            "Muốn thu hồi thì tự gõ /del_all_code để có đề nghị của chính bạn.",
+        )
+        log.warning("xoa_hang_loat_bam_nut_nguoi_khac", actor_id=tg_user.id, chu_de_nghi=raw_actor)
+        return
+
+    de_nghi = await _claim_ticket(ticket)
+    if de_nghi is None:
+        # Vé hết hạn hoặc đã có người bấm. Đây chính là chỗ một cái nút cũ trong lịch sử
+        # chat trở thành vô hại.
+        await sender.send_message(
+            chat_id,
+            "⌛ Đề nghị thu hồi này đã hết hạn hoặc đã được bấm rồi — KHÔNG mã nào bị "
+            "đụng tới.\n\n"
+            "Kho là thứ đang chạy, nên một đề nghị cũ không còn mô tả đúng kho hiện tại.\n"
+            "👉 Gõ lại /del_all_code để xem con số mới nhất.",
+        )
+        return
+
+    code_type = str(de_nghi["code_type"])
+    value_vnd = int(de_nghi["value_vnd"])
+    so_ma_da_hien = int(de_nghi["so_ma"])
     pham_vi = f"{code_type}" + (f" · {texts.value_label(value_vnd)}" if value_vnd else " · TẤT CẢ")
 
     if hanh_dong == "no":
-        await sender.answer_callback(query, "Đã huỷ")
         await sender.send_message(chat_id, f"🛑 Đã huỷ. Không mã nào bị đụng tới: {pham_vi}")
         return
 
-    await sender.answer_callback(query, "Đang xoá...")
+    # Kiểm trần LẦN THỨ HAI, trên kho của ngay lúc này. Chỉ kiểm ở bước gõ lệnh thì cái
+    # nút là một đường vòng qua chính hàng rào đó — kho có thể đã lớn lên rất nhiều giữa
+    # lúc đề nghị được tạo và lúc nó được bấm.
+    async with session() as db:
+        hien_tai = (
+            await db.execute(
+                text(_SQL_COUNT_AVAILABLE), {"code_type": code_type, "value_vnd": value_vnd}
+            )
+        ).one()
+    threshold = await _du_nguong(hien_tai.tong_vnd)
+    if threshold is not None:
+        await sender.send_message(
+            chat_id,
+            f"⛔ TỪ CHỐI — không mã nào bị đụng tới.\n\n"
+            f"Kho của phạm vi {pham_vi} hiện là {texts.format_vnd(hien_tai.tong_vnd)}đ "
+            f"({hien_tai.so_ma:,} mã), vượt ngưỡng duyệt hai người "
+            f"{texts.format_vnd(threshold)}đ.\n\n"
+            f"Lúc tạo đề nghị phạm vi này còn nằm trong ngưỡng ({so_ma_da_hien:,} mã).",
+        )
+        log.warning(
+            "xoa_hang_loat_nut_vuot_nguong",
+            actor_id=tg_user.id,
+            code_type=code_type,
+            value_vnd=value_vnd,
+            tong_vnd=hien_tai.tong_vnd,
+            threshold_vnd=threshold,
+        )
+        return
 
     async with transaction() as db:
         rows = (

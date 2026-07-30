@@ -66,6 +66,10 @@ class Grant:
     value_vnd: int
     #: True khi đây là lần bấm lại và ta trả về đúng grant đã có, không tạo grant mới.
     was_existing: bool
+    #: Trạng thái grant lúc trả về. `was_existing` một mình KHÔNG đủ để kết luận "người
+    #: này đã cầm mã": một grant `reserved` là mã đã giữ chỗ mà lần gửi trước THẤT BẠI,
+    #: nghĩa là người dùng chưa nhận được gì. Chỉ `delivered` mới là đã trao tới tay.
+    state: str = "reserved"
 
 
 async def reserve(
@@ -113,21 +117,56 @@ async def reserve(
         # Đã tồn tại. Trả lại đúng mã cũ — bấm lại phải cho ra cùng kết quả, không phải lỗi.
         existing = (
             await db.execute(
-                select(CodeGrant.grant_id, CodeGrant.code_id, CodeGrant.value_vnd, Code.code_value)
+                select(
+                    CodeGrant.grant_id,
+                    CodeGrant.code_id,
+                    CodeGrant.value_vnd,
+                    CodeGrant.state,
+                    Code.code_value,
+                )
                 .join(Code, Code.code_id == CodeGrant.code_id, isouter=True)
                 .where(CodeGrant.grant_key == grant_key)
             )
         ).one()
         if existing.code_id is None:
-            # Grant có nhưng chưa gắn mã (lần trước hết kho hoặc chết giữa chừng).
-            raise AlreadyClaimed(grant_type, existing_code=None)
-        return Grant(
-            grant_id=existing.grant_id,
-            code_id=existing.code_id,
-            code_value=existing.code_value,
-            value_vnd=existing.value_vnd,
-            was_existing=True,
-        )
+            # ── Grant MỒ CÔI: có dòng grant nhưng không có mã nào gắn vào ──────────
+            #
+            # Hai đường dẫn tới đây, và cả hai đều xảy ra thật:
+            #   1. Lần trước chạm đúng lúc kho rỗng, rồi giao dịch cuộn lại không sạch.
+            #   2. Lần trước giữ chỗ được mã nhưng GỬI THẤT BẠI, nên không `mark_delivered`;
+            #      `reap_reservations()` sau đó trả mã về kho **và NULL `code_grants.code_id`**.
+            #      Đường (2) là đường thường gặp, vì job dọn kho chạy mỗi phút.
+            #
+            # Trước đây chỗ này ném thẳng `AlreadyClaimed`, và **không có đường nào trong
+            # toàn bộ hệ thống gắn lại mã cho một grant mồ côi**. Hệ quả đo được: người
+            # dùng bị khoá VĨNH VIỄN khỏi phần thưởng của chính mình — kho đầy 50 mã mà
+            # bấm bao nhiêu lần cũng nhận đúng một câu "code đang hết", và không lệnh admin
+            # nào gỡ được (`/resend_tanthu` chỉ đọc grant ĐÃ có mã). Lỗi này có ở cả bốn
+            # luồng phát: tân thủ, mốc mời bạn, đập hộp, đổi điểm.
+            #
+            # Nên ở đây **gắn lại**, không ném. Không có rủi ro phát trùng: `grant_key` là
+            # duy nhất nên vẫn đúng một grant, và `uq_grants_code` vẫn giữ đúng một mã.
+            if existing.state != "reserved":
+                # `revoked` / `delivered`-mà-mất-mã là trạng thái không được tự sửa: nó
+                # nghĩa là có ai đó đã can thiệp, và đoán ý ở đây là ghi đè lên quyết định
+                # của con người trên một đường tiêu tiền.
+                raise AlreadyClaimed(grant_type, existing_code=None)
+            grant_id = existing.grant_id
+            log.warning(
+                "gan_lai_ma_cho_grant_mo_coi",
+                grant_key=grant_key,
+                grant_id=grant_id,
+                user_id=user_id,
+            )
+        else:
+            return Grant(
+                grant_id=existing.grant_id,
+                code_id=existing.code_id,
+                code_value=existing.code_value,
+                value_vnd=existing.value_vnd,
+                was_existing=True,
+                state=existing.state,
+            )
 
     # ── Bước 2: chọn VÀ giữ chỗ một mã, trong MỘT câu lệnh ──────────
     # `SKIP LOCKED` là thứ làm câu này an toàn dưới tải: hai worker chạy cùng lúc không
@@ -177,6 +216,7 @@ async def reserve(
         code_value=picked.code_value,
         value_vnd=value_vnd,
         was_existing=False,
+        state="reserved",
     )
 
 

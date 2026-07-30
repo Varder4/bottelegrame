@@ -212,6 +212,29 @@ async def cmd_update_share_event(update: Update, context: ContextTypes.DEFAULT_T
 # ── /show_share_event ───────────────────────────────────────────────
 
 
+def _render_summary(row: Any) -> str:
+    """Tóm tắt cấu hình đang chạy. Dùng ở CẢ hai nhánh của `/show_share_event`.
+
+    Nhánh nhóm không dựng được bản xem thử, nhưng phần tóm tắt thì luôn dựng được — và
+    đó là thứ trả lời câu hỏi thường gặp nhất ("bài đã đặt chưa, link nào").
+    """
+    if row is None:
+        return (
+            "ℹ️ CHƯA CẤU HÌNH EVENT CHIA SẺ\n"
+            "\n"
+            "Người dùng đang thấy nội dung MẶC ĐỊNH.\n"
+            "Đặt bài bằng /update_share_event (reply vào một ảnh)."
+        )
+    return (
+        "👁 CẤU HÌNH EVENT CHIA SẺ\n"
+        f"\n"
+        f"🖼 Ảnh: {'đã có' if row.image_file_id else 'CHƯA CÓ'}\n"
+        f"📝 Caption: {len(row.caption or ''):,} ký tự\n"
+        f"🔗 Link chia sẻ: {row.share_link or '(chưa đặt)'}\n"
+        f"✍️ Sửa lần cuối bởi: {row.updated_by or '—'}"
+    )
+
+
 @admin_command(CMD_SHOW, mutates=False)
 async def cmd_show_share_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Bản xem thử — dựng bằng CHÍNH handler của người dùng (§13.4.2 mục 11).
@@ -220,38 +243,45 @@ async def cmd_show_share_event(update: Update, context: ContextTypes.DEFAULT_TYP
     bản thật, và nó trôi đúng vào lúc người ta cần nó nhất. Đổi lại, mọi thứ người dùng
     thấy — ảnh chết thì rơi về text, thiếu link thì mất nút — đều hiện ra ở đây y hệt.
     """
-    chat_id = _chat_id(update)
-    if chat_id is None:
+    chat = update.effective_chat
+    if chat is None:
         return
+    chat_id = chat.id
     sender = _sender(context)
 
     async with session() as db:
         row = (await db.execute(text(_SQL_READ_CONFIG))).one_or_none()
 
-    if row is None:
-        await sender.send_message(
-            chat_id,
-            "ℹ️ Chưa cấu hình event chia sẻ — người dùng đang thấy nội dung MẶC ĐỊNH.\n\n"
-            "Đặt bài bằng /update_share_event (reply vào một ảnh).\n\n"
-            "Bản mặc định người dùng đang thấy 👇",
-        )
-    else:
+    # `handle_share_event` đi qua `misc._enter`, thứ trả `None` ngay khi `chat.type` không
+    # phải `private` — nó là màn hình của người dùng, và người dùng chỉ gặp nó trong chat
+    # riêng. Không kiểm ở đây thì lệnh in "Bên dưới là ĐÚNG thứ người dùng thấy 👇" rồi
+    # **không gửi gì cả**: không ảnh, không lỗi, không dấu hiệu nào. Mà việc admin gõ lệnh
+    # trong nhóm điều hành là trường hợp THƯỜNG, không phải ngoại lệ — và cả lệnh này tồn
+    # tại để kiểm tra trước khi công bố, nên im lặng là kiểu hỏng tệ nhất có thể ở đây.
+    if chat.type != "private":
         await sender.send_message(
             chat_id,
             (
-                "👁 BẢN XEM THỬ EVENT CHIA SẺ\n"
-                f"\n"
-                f"🖼 Ảnh: {'đã có' if row.image_file_id else 'CHƯA CÓ'}\n"
-                f"📝 Caption: {len(row.caption or ''):,} ký tự\n"
-                f"🔗 Link chia sẻ: {row.share_link or '(chưa đặt)'}\n"
-                f"✍️ Sửa lần cuối: {row.updated_by or '—'}\n"
-                f"\n"
-                "Bên dưới là ĐÚNG thứ người dùng thấy khi bấm 📢 EVENT 👇"
+                "ℹ️ Bản xem thử chỉ dựng được trong CHAT RIÊNG với bot.\n"
+                "\n"
+                "Lệnh này cố ý chạy lại đúng đường mà người dùng đi, và đường đó chặn mọi\n"
+                "thứ không phải chat riêng — nên trong nhóm nó sẽ không hiện được gì.\n"
+                "\n"
+                f"{_render_summary(row)}\n"
+                "\n"
+                "👉 Nhắn /show_share_event cho bot trong chat riêng để xem bản đầy đủ."
             ),
         )
+        return
+
+    await sender.send_message(
+        chat_id,
+        f"{_render_summary(row)}\n\nBên dưới là ĐÚNG thứ người dùng thấy khi bấm 📢 EVENT 👇",
+    )
 
     # `handle_share_event` có cooldown riêng của luồng người dùng. Đi qua nó nguyên vẹn là
-    # cố ý: admin bấm hai lần liên tiếp cũng gặp đúng thứ người dùng gặp.
+    # cố ý: admin bấm hai lần liên tiếp cũng gặp đúng thứ người dùng gặp — kể cả câu "bạn
+    # bấm hơi nhanh". Đó vẫn là một phản hồi, khác hẳn với im lặng.
     await misc.handle_share_event(update, context)
 
 
@@ -294,14 +324,17 @@ async def cmd_done_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 reason={"duyet_boi": tg_user.id},
             )
     except AlreadyClaimed:
-        # Có grant nhưng CHƯA gắn được mã — lần trước chạm đúng lúc kho rỗng.
+        # Sau khi `reserve()` biết gắn lại mã cho grant mồ côi, nhánh này chỉ còn nghĩa
+        # một điều: grant đang ở trạng thái KHÔNG được tự sửa (`revoked`). Đó là dấu vết
+        # của một lần can thiệp bằng tay, và đoán ý ở đây là ghi đè quyết định của con
+        # người trên một đường tiêu tiền.
         await sender.send_message(
             chat_id,
-            f"⚠️ {target_id} đã có suất event chia sẻ nhưng CHƯA gắn được mã "
-            f"(lúc đó kho rỗng).\n\n"
-            f"👉 Nạp code rồi chạy lại đúng lệnh này.",
+            f"⛔ Suất event chia sẻ của {target_id} đang ở trạng thái đã bị can thiệp "
+            f"(thu hồi), không tự trao lại được.\n\n"
+            f"👉 Xem lịch sử: /user {target_id}",
         )
-        log.warning("done_event_grant_chua_co_ma", actor_id=tg_user.id, target_id=target_id)
+        log.warning("done_event_grant_bi_thu_hoi", actor_id=tg_user.id, target_id=target_id)
         return
 
     except OutOfStock:
@@ -315,12 +348,17 @@ async def cmd_done_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         log.error("done_event_het_kho", actor_id=tg_user.id, target_id=target_id)
         return
 
-    if grant.was_existing:
+    if grant.was_existing and grant.state == "delivered":
         # `reserve()` idempotent theo `grant_key`: chạy lại KHÔNG cấp mã thứ hai, nó trả về
         # đúng grant cũ. Không phân biệt ở đây thì CSKH đọc được "đã trao" như thể vừa trao
         # mới, và `audit_log` có hai dòng cho một lần trao — đúng loại sai lệch làm sổ mất
         # giá trị đối chiếu. Đây là chỗ "một lần trọn đời" hiện ra với người vận hành;
         # hàng rào thật nằm ở `uq_grant_once_semantic` của database.
+        #
+        # Điều kiện là `state == 'delivered'`, KHÔNG phải `was_existing` một mình. Một
+        # grant `reserved` nghĩa là lần gửi trước THẤT BẠI: người dùng chưa cầm gì cả, và
+        # báo "đã nhận rồi" kèm số hiệu mã cho CSKH là đóng hồ sơ trên một lời không đúng.
+        # Rơi xuống dưới thì lệnh gửi lại đúng mã đó — đúng việc CSKH đang muốn làm.
         await sender.send_message(
             chat_id,
             (

@@ -306,7 +306,7 @@ async def test_show_dung_chinh_duong_cua_nguoi_dung(owner):
     sender = FakeSender()
     await se.cmd_show_share_event(make_update(owner), make_context(sender))
 
-    assert "BẢN XEM THỬ" in sender.all_text
+    assert "CẤU HÌNH EVENT CHIA SẺ" in sender.all_text
     # ...và ảnh thật được gửi qua đúng `file_id` đã lưu.
     assert sender.photos, "không gửi bản xem thử — admin không kiểm được trước khi công bố"
     assert sender.photos[-1][1] == "FILEXEM"
@@ -319,7 +319,7 @@ async def test_show_noi_ro_khi_chua_cau_hinh(owner):
     sender = FakeSender()
     await se.cmd_show_share_event(make_update(owner), make_context(sender))
 
-    assert "Chưa cấu hình" in sender.all_text
+    assert "CHƯA CẤU HÌNH" in sender.all_text
 
 
 # ── /done_event ─────────────────────────────────────────────────────
@@ -413,3 +413,102 @@ async def test_done_event_khong_tim_thay_nguoi_dung(owner):
     sender = FakeSender()
     await se.cmd_done_event(make_update(owner), make_context(sender, "@aokhongcothat"))
     assert "Không tìm thấy" in sender.last
+
+
+# ── Ba nhánh bộ soát chỉ ra, và không bài kiểm nào canh ─────────────
+
+
+def make_group_update(user_id: int) -> Any:
+    """Lệnh gõ trong NHÓM điều hành — trường hợp thường, không phải ngoại lệ."""
+    update = make_update(user_id)
+    update.effective_chat = SimpleNamespace(id=-100_123, type="supergroup")
+    return update
+
+
+@pytest.mark.asyncio
+async def test_show_trong_nhom_khong_duoc_hua_roi_im_lang(owner):
+    """`misc._enter` trả `None` với mọi chat không phải riêng — nên bản xem thử không hiện.
+
+    Bản trước vẫn in "Bên dưới là ĐÚNG thứ người dùng thấy 👇" rồi **không gửi gì cả**:
+    không ảnh, không lỗi, không dấu hiệu nào. Mà cả lệnh này tồn tại để kiểm tra trước khi
+    công bố, nên im lặng là kiểu hỏng tệ nhất có thể ở đây.
+    """
+    await set_setting("cooldown.share_event", 0, "seconds")
+    sender = FakeSender()
+    await se.cmd_update_share_event(
+        make_update(owner, reply_photo=("F1", "bài đăng")), make_context(sender, "https://c.se/1")
+    )
+
+    sender = FakeSender()
+    await se.cmd_show_share_event(make_group_update(owner), make_context(sender))
+
+    assert sender.messages, "gõ trong nhóm mà bot im lặng hoàn toàn"
+    assert "CHAT RIÊNG" in sender.last
+    # Vẫn phải trả lời được câu hỏi thường gặp nhất: bài đã đặt chưa, link nào.
+    assert "https://c.se/1" in sender.last
+    assert "👇" not in sender.last, "hứa một bản xem thử mà không có gì theo sau"
+
+
+@pytest.mark.asyncio
+async def test_done_event_gui_hong_roi_thu_lai_thi_NHAN_DUOC_MA(owner):
+    """Kịch bản bộ soát dựng lại được: gửi hỏng → job dọn kho → CSKH chạy lại.
+
+    Lệnh tự dặn "bảo họ mở chat với bot rồi chạy lại lệnh". Bản trước, chạy lại đúng câu
+    dặn đó trả về "CHƯA gắn được mã (lúc đó kho rỗng)" — trong khi kho đầy 50 mã. Người
+    dùng không bao giờ nhận được code, và không lệnh admin nào gỡ được.
+    """
+    await _san_sang_trao(codes=50)
+
+    # Lần một: gửi cho người nhận thất bại.
+    sender = FakeSender(deliver=False)
+    await se.cmd_done_event(make_update(owner), make_context(sender, str(TARGET_ID)))
+    assert (
+        await scalar("SELECT state FROM code_grants WHERE user_id = :u", {"u": TARGET_ID})
+        == "reserved"
+    )
+
+    # Job dọn kho chạy — trả mã về kho và NULL `code_grants.code_id`.
+    from televip.services import code_issuance
+
+    await run_sql("UPDATE codes SET reserved_until = now() - interval '1 minute'")
+    async with db_session() as s:
+        await code_issuance.reap_reservations(s)
+        await s.commit()
+
+    # Lần hai: đúng câu lệnh mà bot vừa dặn.
+    sender = FakeSender()
+    await se.cmd_done_event(make_update(owner), make_context(sender, str(TARGET_ID)))
+
+    assert "ĐÃ TRAO CODE" in sender.to(owner)[-1], sender.to(owner)[-1]
+    assert sender.to(TARGET_ID), "người dùng vẫn không nhận được gì"
+    assert (
+        await scalar("SELECT state FROM code_grants WHERE user_id = :u", {"u": TARGET_ID})
+        == "delivered"
+    )
+    assert (
+        await scalar("SELECT count(*) FROM code_grants WHERE user_id = :u", {"u": TARGET_ID}) == 1
+    ), "gắn lại phải dùng ĐÚNG grant cũ, không tạo grant thứ hai"
+
+
+@pytest.mark.asyncio
+async def test_done_event_gui_hong_roi_thu_lai_NGAY_thi_van_gui_lai_ma(owner):
+    """Trước khi job dọn kho kịp chạy: grant vẫn giữ mã, state vẫn `reserved`.
+
+    Bản trước rơi vào nhánh `was_existing` và báo "ĐÃ NHẬN code trước đó" kèm số hiệu mã —
+    đóng hồ sơ trên một lời không đúng, vì người dùng chưa cầm gì cả. Mã đó rồi bị dọn về
+    kho và trao cho người kế tiếp.
+    """
+    await _san_sang_trao()
+
+    sender = FakeSender(deliver=False)
+    await se.cmd_done_event(make_update(owner), make_context(sender, str(TARGET_ID)))
+
+    sender = FakeSender()
+    await se.cmd_done_event(make_update(owner), make_context(sender, str(TARGET_ID)))
+
+    assert "ĐÃ NHẬN" not in sender.to(owner)[-1], sender.to(owner)[-1]
+    assert sender.to(TARGET_ID), "không gửi lại mã cho người chưa từng nhận được gì"
+    assert (
+        await scalar("SELECT state FROM code_grants WHERE user_id = :u", {"u": TARGET_ID})
+        == "delivered"
+    )

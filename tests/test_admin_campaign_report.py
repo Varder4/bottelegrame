@@ -380,21 +380,36 @@ async def test_baocao_ky_rong_khong_bia_ra_ti_le(owner):
     await rp.cmd_baocao(make_update(owner), make_context(sender))
 
     assert "chưa phát mã nào" in sender.last
-    assert "Vào → xác minh" not in sender.last
+    assert "đã xác minh" not in sender.last
 
 
 @pytest.mark.asyncio
-async def test_baocao_co_nguoi_moi_thi_moi_in_ti_le(owner):
-    """Chiều ngược lại — mẫu số khác 0 thì tỉ lệ phải có mặt."""
+async def test_baocao_ti_le_tinh_tren_DUNG_MOT_tep_nguoi(owner):
+    """Tử số và mẫu số phải là cùng một tệp, nếu không tỉ lệ in ra được 300%.
+
+    Dựng đúng cái bẫy: hai người VÀO trong kỳ (một đã xác minh), cộng hai người vào từ
+    tháng trước nhưng XÁC MINH hôm nay. Đếm `verified_at` trong kỳ làm tử số sẽ ra 3/2.
+    """
+    await run_sql("UPDATE users SET joined_at = now() - interval '60 days'")  # kể cả owner
+
     async with db_session() as s:
-        await make_user(s, 951_040)
+        for uid in (951_040, 951_041, 951_050, 951_051):
+            await make_user(s, uid)
         await s.commit()
+    # Hai người CŨ, xác minh hôm nay.
+    await run_sql(
+        "UPDATE users SET joined_at = now() - interval '60 days', verified_at = now() "
+        "WHERE user_id IN (951050, 951051)"
+    )
+    # Hai người MỚI, một xác minh.
     await run_sql("UPDATE users SET verified_at = now() WHERE user_id = 951040")
 
     sender = FakeSender()
     await rp.cmd_baocao(make_update(owner), make_context(sender))
 
-    assert "Vào → xác minh" in sender.last
+    assert "Trong 2 người mới: 1 đã xác minh (50%)" in sender.last, sender.last
+    # ...và số lượt xác minh xảy ra trong kỳ vẫn được báo, chỉ là ở một dòng khác.
+    assert "lượt xác minh trong kỳ: 3" in sender.last
 
 
 @pytest.mark.asyncio
