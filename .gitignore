@@ -1,0 +1,34 @@
+# Bí mật — KHÔNG BAO GIỜ commit
+.env
+.env.*
+!.env.example
+*.token
+secrets/
+
+# Môi trường Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Dữ liệu và log
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.log
+logs/
+data/
+media_cache/
+
+# GeoIP (tải riêng, không commit binary lớn)
+*.mmdb
+
+# Hệ điều hành / IDE
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/

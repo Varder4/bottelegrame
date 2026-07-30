@@ -1,0 +1,59 @@
+# Hạ tầng cho máy dev (Windows). Production trên Ubuntu chạy Postgres/Redis native, KHÔNG Docker.
+# Dùng: docker compose -f docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: televip-pg
+    environment:
+      POSTGRES_USER: televip
+      POSTGRES_PASSWORD: televip_dev_only
+      POSTGRES_DB: televip
+      # Chuẩn hoá để dev giống prod: so sánh chuỗi không phụ thuộc locale máy
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5433:5432" # 5433 để không đụng Postgres cài sẵn trên máy nếu có
+    volumes:
+      - televip_pgdata:/var/lib/postgresql/data
+    command:
+      # Nấc A (2 vCPU / 4 GB) — cùng bộ số với production, xem 06-kientruc.md §6.5
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - synchronous_commit=on
+      - -c
+      - max_connections=200
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U televip -d televip"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: televip-redis
+    ports:
+      - "6380:6379" # 6380 để không đụng Redis cài sẵn
+    command:
+      # noeviction, KHÔNG allkeys-lru: khoá idempotency và token bucket bị đuổi ra là phát trùng code
+      - redis-server
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - noeviction
+      - --appendonly
+      - "yes"
+    volumes:
+      - televip_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  televip_pgdata:
+  televip_redisdata:

@@ -1,0 +1,57 @@
+[project]
+name = "televip"
+version = "0.1.0"
+description = "Bot Telegram phát gift code — xây mới hoàn toàn"
+requires-python = ">=3.12"
+dependencies = [
+    "python-telegram-bot[job-queue]==21.*",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "redis>=5.2",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "structlog>=24.4",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "gunicorn>=23.0; sys_platform != 'win32'",
+    "uvloop>=0.21; sys_platform != 'win32'",
+    "orjson>=3.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "httpx>=0.28",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning:televip.*"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "T20"]
+ignore = [
+    "S101", # assert — dùng trong test
+    "E501", # độ dài dòng đã do formatter lo
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "T20"]
+# Chỉ tầng telegram/sender.py được phép gọi Bot API trực tiếp — kiểm bằng script riêng,
+# ruff không diễn đạt được luật này nên xem scripts/check_architecture.py
