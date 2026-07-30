@@ -434,6 +434,54 @@ class SettingsAudit(Base):
     __table_args__ = (Index("ix_settings_audit_key_at", "key", "changed_at"),)
 
 
+class MessageTemplate(Base, UpdatedAtMixin):
+    """Câu chữ gửi cho người dùng, sửa được bằng lệnh admin — không phải bằng deploy.
+
+    Cùng nguyên tắc với `settings` nhưng cho VĂN BẢN thay vì con số: `domain/texts.py` giữ
+    bản **mặc định** (và là lưới an toàn khi bảng này mất một dòng), còn bảng này giữ bản
+    admin đang chạy. Đọc qua `services/text_service.py` với cache 60 giây.
+
+    `required_vars` là danh sách biến bắt buộc của khoá (`["code_value", "value_vnd"]`).
+    Nó tồn tại để `set_content` **từ chối** một nội dung mới đánh rơi `{code_value}`: nếu
+    không có hàng rào đó, tin trả code vẫn gửi đi nhưng không có mã trong đó, và không ai
+    biết cho tới khi người dùng khiếu nại.
+    """
+
+    __tablename__ = "message_templates"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Nhãn hiện trong `/noidung`.
+    label_vi: Mapped[str] = mapped_column(Text, nullable=False)
+    required_vars: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    updated_by: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class MessageTemplateAudit(Base):
+    """Lịch sử sửa câu chữ, **append-only** — đường quay lui khi ai đó sửa hỏng.
+
+    Giữ cả `old_content` lẫn `new_content` vì câu hỏi cần trả lời không phải "nội dung bây
+    giờ là gì" (đọc `message_templates` là biết) mà "trước khi hỏng thì nó là gì": khôi
+    phục bằng `/suanoidung` cần chính chuỗi cũ, không cần một dòng mô tả về nó.
+    """
+
+    __tablename__ = "message_templates_audit"
+
+    audit_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    #: NULL khi đây là lần đặt nội dung đầu tiên cho khoá.
+    old_content: Mapped[str | None] = mapped_column(Text)
+    new_content: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_message_templates_audit_key_at", "key", "changed_at"),)
+
+
 class SystemStats(Base, UpdatedAtMixin):
     """**Đúng một dòng** (`id = 1`), scheduler làm mới mỗi 30 giây.
 

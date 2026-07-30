@@ -22,14 +22,19 @@ from telegram.ext import (
     filters,
 )
 
+from televip.apps.worker.handlers.admin import broadcast as admin_broadcast
 from televip.apps.worker.handlers.admin import codes as admin_codes
 from televip.apps.worker.handlers.admin import ops as admin_ops
+from televip.apps.worker.handlers.admin import texts as admin_texts
+from televip.apps.worker.handlers.open_gift import handle_open_gift
 from televip.apps.worker.handlers.start import handle_start
 from televip.apps.worker.handlers.tanthu import handle_check_groups, handle_tanthu
+from televip.apps.worker.outbox_worker import run_outbox_worker
 from televip.cache.client import close_redis, init_redis
 from televip.core.config import get_settings
 from televip.core.logging import get_logger, setup_logging
 from televip.db.engine import dispose_engine, init_engine
+from televip.services import broadcast as broadcast_service
 from televip.services.membership import handle_chat_member_update
 from televip.telegram import keyboards
 from televip.telegram.sender import Sender
@@ -59,6 +64,11 @@ ADMIN_COMMANDS: list[tuple[str, object]] = [
     ("admin_add", admin_ops.cmd_admin_add),
     ("admin_del", admin_ops.cmd_admin_del),
     ("help_admin", admin_ops.cmd_help_admin),
+    # Nội dung tin nhắn sửa nóng (§13.4.3) — `handlers/admin/texts.py`.
+    *admin_texts.COMMANDS.items(),
+    # Bắn tin hàng loạt (§13.4.2 mục 8 và §13.4.3). `/broadcast` KHÔNG gửi ngay khi gõ:
+    # nó dựng bản xem thử rồi chờ nút xác nhận — xem `handlers/admin/broadcast.py`.
+    *admin_broadcast.COMMANDS,
 ]
 
 #: Menu lệnh cho người dùng thường (13-dac-ta §13.3.2). Lệnh admin KHÔNG nằm ở đây —
@@ -69,10 +79,48 @@ PUBLIC_COMMANDS = [
 ]
 
 
+#: Khoá giữ task của worker outbox trong `bot_data` — để chỗ tắt tiến trình huỷ được nó.
+OUTBOX_TASK_KEY = "outbox_worker_task"
+
+
+def _start_outbox_worker(app: Application) -> asyncio.Task[None]:
+    """Chạy vòng lặp gửi outbox như một task nền **trong chính tiến trình bot**.
+
+    Cùng tiến trình vì cả hai dùng chung một `Sender`, và token bucket 30 tin/giây chỉ có
+    nghĩa khi mọi tin đi qua cùng một cửa. Không có nó thì mọi thứ vẫn "chạy": lệnh vẫn
+    trả lời, `broadcast_targets` vẫn đầy lên — chỉ là không một tin nào rời hàng đợi.
+    """
+    task = asyncio.create_task(run_outbox_worker(app), name="outbox-worker")
+    app.bot_data[OUTBOX_TASK_KEY] = task
+    return task
+
+
+async def _stop_outbox_worker(app: Application) -> None:
+    """Huỷ task worker và **chờ nó dừng hẳn** trước khi đóng pool database.
+
+    Không chờ thì `dispose_engine()` chạy trong khi worker còn đang giữ một session, và
+    triệu chứng là một traceback vô nghĩa lúc tắt che mất lỗi thật (nếu có).
+    """
+    task = app.bot_data.pop(OUTBOX_TASK_KEY, None)
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    log.info("outbox_worker_da_dung")
+
+
 async def _on_startup(app: Application) -> None:
     await app.bot.set_my_commands(PUBLIC_COMMANDS)
     me = await app.bot.get_me()
-    log.info("bot_san_sang", username=me.username, bot_id=me.id)
+    _start_outbox_worker(app)
+    # Đợt broadcast còn dở sau một lần restart: trạng thái nằm trong `broadcast_targets`
+    # nên "chạy tiếp" chỉ là dựng lại vòng bơm. Thiếu bước này thì đợt đứng im vĩnh viễn ở
+    # trạng thái `running` mà không có dòng lỗi nào.
+    resumed = await broadcast_service.resume_running_jobs()
+    log.info("bot_san_sang", username=me.username, bot_id=me.id, broadcast_chay_tiep=len(resumed))
 
 
 def build_application() -> Application:
@@ -111,6 +159,15 @@ def build_application() -> Application:
     )
     app.add_handler(
         CallbackQueryHandler(handle_check_groups, pattern=f"^{keyboards.CB_CHECK_GROUPS}$")
+    )
+    app.add_handler(CallbackQueryHandler(handle_open_gift, pattern=f"^{keyboards.CB_OPEN_GIFT}$"))
+    # Hai nút xác nhận của `/broadcast`. Handler tự kiểm quyền (`@admin_command`) — đăng ký
+    # ở đây không cấp quyền cho ai, và nó phải đứng TRƯỚC lưới an toàn callback bên dưới.
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_broadcast.handle_broadcast_callback,
+            pattern=admin_broadcast.CALLBACK_PATTERN,
+        )
     )
     # Nguồn cập nhật `group_memberships`, 0 lời gọi API. Phải đi cùng `ALLOWED_UPDATES`
     # bên dưới — thiếu một trong hai là bảng đóng băng vĩnh viễn mà không có dòng lỗi nào.
@@ -175,6 +232,7 @@ async def run_forever(app: Application) -> None:
     finally:
         if app.updater.running:
             await app.updater.stop()
+        await _stop_outbox_worker(app)
         await app.stop()
         await app.shutdown()
 

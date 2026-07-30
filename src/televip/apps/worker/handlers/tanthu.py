@@ -32,7 +32,7 @@ from televip.core.ids import grant_key_tanthu
 from televip.core.logging import get_logger
 from televip.db.engine import session, transaction
 from televip.domain import texts
-from televip.services import code_issuance, membership, settings_service
+from televip.services import code_issuance, membership, settings_service, text_service
 from televip.telegram import keyboards
 
 log = get_logger(__name__)
@@ -98,7 +98,10 @@ async def handle_tanthu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         await check_cooldown(tg_user.id, COOLDOWN_ACTION, cooldown)
     except RateLimited as exc:
-        await sender.send_message(chat.id, texts.rate_limited(exc.retry_after_seconds))
+        await sender.send_message(
+            chat.id,
+            await text_service.render("error.rate_limited", seconds=exc.retry_after_seconds),
+        )
         return
 
     async with session() as db:
@@ -109,7 +112,7 @@ async def handle_tanthu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game_link = await settings_service.get_str("link.game_bot", "")
         await sender.send_message(
             chat.id,
-            texts.tanthu_already_claimed(game_link),
+            await text_service.render("tanthu.already_claimed", game_link=game_link),
             reply_markup=keyboards.enter_code_keyboard(game_link) if game_link else None,
         )
         return
@@ -118,7 +121,7 @@ async def handle_tanthu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         url = await gate.verify_url()
         if not url:
             log.error("thieu_cau_hinh", key=gate.VERIFY_URL_KEY)
-            await sender.send_message(chat.id, texts.system_busy())
+            await sender.send_message(chat.id, await text_service.render("error.system_busy"))
             return
         await sender.send_message(
             chat.id,
@@ -131,7 +134,7 @@ async def handle_tanthu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Không có nhóm bắt buộc nào đang bật là lỗi cấu hình (G0.3 yêu cầu ít nhất một).
         # Hiện màn hình bước 2 rỗng thì người dùng không có gì để làm mà vẫn bị chặn.
         log.error("khong_co_nhom_bat_buoc")
-        await sender.send_message(chat.id, texts.system_busy())
+        await sender.send_message(chat.id, await text_service.render("error.system_busy"))
         return
 
     fanpage_link = await settings_service.get_str("link.fanpage", "")
@@ -168,16 +171,19 @@ async def handle_check_groups(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Bot bị gỡ quyền admin, chat_id chết, hoặc Telegram lỗi. §13.2.3 bước 4: không
         # chặn người dùng vì lỗi hạ tầng của mình.
         log.error("kiem_nhom_that_bai", user_id=tg_user.id, chat_id=exc.chat_id)
-        await sender.send_message(chat.id, texts.system_busy())
+        await sender.send_message(chat.id, await text_service.render("error.system_busy"))
         return
 
     if total == 0:
         log.error("khong_co_nhom_bat_buoc")
-        await sender.send_message(chat.id, texts.system_busy())
+        await sender.send_message(chat.id, await text_service.render("error.system_busy"))
         return
 
     if missing:
-        await sender.send_message(chat.id, texts.missing_groups(joined, total))
+        await sender.send_message(
+            chat.id,
+            await text_service.render("tanthu.missing_groups", joined=joined, total=total),
+        )
         return
 
     value_vnd = await settings_service.get_int("code.tanthu_value_vnd", DEFAULT_TANTHU_VALUE_VND)
@@ -194,19 +200,27 @@ async def handle_check_groups(update: Update, context: ContextTypes.DEFAULT_TYPE
                 value_vnd=value_vnd,
             )
     except OutOfStock:
-        await sender.send_message(chat.id, texts.out_of_stock(support_link))
+        await sender.send_message(
+            chat.id,
+            await text_service.render("code.out_of_stock", support_link=support_link),
+        )
         return
     except AlreadyClaimed:
         # Grant đã có nhưng CHƯA gắn được mã — lần trước chạm đúng lúc kho rỗng. Với người
         # dùng thì tình huống này là "code đang hết", không phải "bạn đã nhận rồi".
         log.warning("grant_tanthu_chua_co_ma", user_id=tg_user.id)
-        await sender.send_message(chat.id, texts.out_of_stock(support_link))
+        await sender.send_message(
+            chat.id,
+            await text_service.render("code.out_of_stock", support_link=support_link),
+        )
         return
 
     game_link = await settings_service.get_str("link.game_bot", "")
     sent = await sender.send_message(
         chat.id,
-        texts.code_delivered(grant.code_value, grant.value_vnd),
+        await text_service.render(
+            "code.delivered", code_value=grant.code_value, value_vnd=grant.value_vnd
+        ),
         reply_markup=keyboards.enter_code_keyboard(game_link) if game_link else None,
     )
     if sent is None:

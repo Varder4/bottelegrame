@@ -15,8 +15,7 @@ from telegram.ext import ContextTypes
 
 from televip.core.logging import get_logger
 from televip.db.engine import session
-from televip.domain import texts
-from televip.services import settings_service
+from televip.services import settings_service, text_service
 from televip.telegram import keyboards
 
 log = get_logger(__name__)
@@ -68,12 +67,12 @@ async def require_verified(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # Lỗi cấu hình của mình, không phải lỗi của người dùng: không đổ lên đầu họ một
         # thông báo khó hiểu, và cũng không dựng `WebAppInfo(url="")` để Telegram từ chối.
         log.error("thieu_cau_hinh", key=VERIFY_URL_KEY)
-        await sender.send_message(chat.id, texts.system_busy())
+        await sender.send_message(chat.id, await text_service.render("error.system_busy"))
         return False
 
     await sender.send_message(
         chat.id,
-        texts.not_verified(),
+        await text_service.render("verify.not_verified"),
         reply_markup=keyboards.verify_keyboard(url),
     )
     return False

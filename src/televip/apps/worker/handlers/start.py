@@ -20,8 +20,7 @@ from televip.cache.antispam import check_cooldown
 from televip.core.errors import RateLimited
 from televip.core.logging import get_logger
 from televip.db.engine import transaction
-from televip.domain import texts
-from televip.services import settings_service, users
+from televip.services import settings_service, text_service, users
 from televip.telegram import keyboards
 
 log = get_logger(__name__)
@@ -42,7 +41,10 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         cooldown = await settings_service.get_float("cooldown.start", 3.0)
         await check_cooldown(tg_user.id, "start", cooldown)
     except RateLimited as exc:
-        await sender.send_message(chat.id, texts.rate_limited(exc.retry_after_seconds))
+        await sender.send_message(
+            chat.id,
+            await text_service.render("error.rate_limited", seconds=exc.retry_after_seconds),
+        )
         return
 
     payload = context.args[0] if context.args else None
@@ -71,11 +73,11 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     await sender.send_message(
         chat.id,
-        texts.start_welcome(),
+        await text_service.render("start.welcome"),
         reply_markup=keyboards.main_keyboard(),
     )
     await sender.send_message(
         chat.id,
-        texts.start_gift_teaser(),
+        await text_service.render("start.gift_teaser"),
         reply_markup=keyboards.open_gift_keyboard(),
     )

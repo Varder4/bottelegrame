@@ -76,6 +76,7 @@ async def _truncate_all(s: AsyncSession) -> None:
             event_participations, events, share_event_config,
             group_memberships, membership_events, membership_mismatch, required_chats,
             broadcast_targets, broadcast_jobs, outbox_messages, media_assets,
+            message_templates_audit, message_templates,
             audit_log, admin_permissions, admin_users, settings_audit, settings,
             system_stats, user_stats,
             identity_clusters, cluster_stats, risk_assessments, fraud_cases,

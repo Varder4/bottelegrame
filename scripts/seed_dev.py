@@ -90,7 +90,7 @@ async def main(count: int, verify_url: str | None) -> None:
                 await db.execute(
                     text("""
                     INSERT INTO settings (key, value, value_type, label_vi)
-                         VALUES ('webapp.verify_url', CAST(:url AS jsonb), 'string',
+                         VALUES ('webapp.url', CAST(:url AS jsonb), 'string',
                                  'URL Mini App xác minh')
                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
                     """),
