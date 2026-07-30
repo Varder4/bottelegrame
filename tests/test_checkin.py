@@ -627,3 +627,37 @@ def test_parse_redeem_value():
     assert checkin_handler.parse_redeem_value("redeem_") is None
     assert checkin_handler.parse_redeem_value("dap_hop_3") is None
     assert checkin_handler.parse_redeem_value(None) is None
+
+
+# ── 8. Cấu hình hỏng không được làm nút quay vòng ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cau_hinh_hong_thi_nut_doi_code_van_duoc_tra_loi(wired):
+    """`redeem.tiers` hỏng ném `ConfigError` từ TẬN TRONG giao dịch.
+
+    Không có nhánh bắt, ngoại lệ thoát khỏi handler, `answer_callback` không bao giờ được
+    gọi, và Telegram để nút quay ~15 giây rồi báo lỗi mạng. Người dùng đọc ra "bot chết",
+    còn admin thì chỉ thấy một traceback không gắn với ai — đúng kiểu hỏng im lặng mà
+    §13.3.3 bắt phải trả lời callback trong MỌI đường thoát.
+    """
+    uid = 7801
+    await setup_user(uid, codes=3, code_value=20_000)
+    await grant_points(uid, 50_000)
+    # `[0]` lọt qua kiểu json của `settings` nhưng `redeem_tiers()` từ chối: đúng thứ admin
+    # gõ nhầm được bằng /setcauhinh.
+    await set_setting("redeem.tiers", [0], "json")
+
+    sender = FakeSender()
+    await checkin_handler.handle_redeem(
+        make_update(uid, callback_data="redeem_20000"), make_context(sender)
+    )
+
+    assert sender.answers, "callback KHÔNG được trả lời — nút sẽ quay vòng cho tới khi hết giờ"
+    assert "bận" in sender.last.lower() or "thử lại" in sender.last.lower()
+
+    # Và không có gì bị tiêu: giao dịch cuộn lại, điểm còn nguyên, kho còn nguyên.
+    assert await scalar("SELECT points_balance FROM users WHERE user_id = :uid", {"uid": uid}) == (
+        50_000
+    )
+    assert await scalar("SELECT count(*) FROM code_grants WHERE user_id = :uid", {"uid": uid}) == 0

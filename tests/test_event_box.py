@@ -32,6 +32,7 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from televip.apps.worker.handlers import event_box as event_box_handler
+from televip.apps.worker.handlers.admin import broadcast as bc
 from televip.apps.worker.handlers.admin import event as admin_event
 from televip.core.errors import ConfigError
 from televip.db.engine import session as db_session
@@ -118,10 +119,10 @@ class FakeSender:
         return self.messages[-1]
 
 
-def make_update(user_id: int, *, callback_data: str | None = None) -> Any:
+def make_update(user_id: int, *, callback_data: str | None = None, text: str | None = None) -> Any:
     chat = SimpleNamespace(id=user_id, type="private")
     user = SimpleNamespace(id=user_id, username=f"u{user_id}", full_name=f"U {user_id}")
-    message = SimpleNamespace(message_id=1, text=None, chat=chat)
+    message = SimpleNamespace(message_id=1, text=text, chat=chat)
     query = (
         SimpleNamespace(data=callback_data, message=message) if callback_data is not None else None
     )
@@ -697,6 +698,48 @@ async def test_gui_that_bai_thi_khong_danh_dau_da_giao(wired):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def test_parse_args_giu_nguyen_xuong_dong_cua_loi_dan() -> None:
+    """Lời dẫn ba đoạn phải tới người nhận đúng là ba đoạn.
+
+    `/broadcast` đã phải sửa đúng lỗi này; đường event chỉ là chưa ai bấm trúng.
+    """
+    parsed = admin_event.parse_args("dòng1\ndòng2\n\ndòng4")
+    assert parsed.intro == "dòng1\ndòng2\n\ndòng4"
+    assert parsed.audience == "active_30d"
+    assert parsed.force_small is False
+
+
+def test_parse_args_van_nhan_dien_co_khi_loi_dan_nhieu_dong() -> None:
+    parsed = admin_event.parse_args("dòng1\ndòng2 --all --force-small")
+    assert parsed.intro == "dòng1\ndòng2"
+    assert parsed.audience == "all"
+    assert parsed.force_small is True
+
+
+def test_parse_args_loi_dan_rong_van_hop_le() -> None:
+    """Khác `/broadcast`: `/send_event` không cần lời dẫn, khối tỉ lệ tự đứng một mình."""
+    assert admin_event.parse_args("").intro == ""
+    assert admin_event.parse_args("--all").audience == "all"
+
+
+def test_parse_args_tu_choi_co_la() -> None:
+    with pytest.raises(bc.BroadcastArgError):
+        admin_event.parse_args("--al xin chao")
+
+
+def test_parse_args_khong_coi_url_la_co() -> None:
+    parsed = admin_event.parse_args("Vào https://televip.test/a--b nhé")
+    assert parsed.intro == "Vào https://televip.test/a--b nhé"
+
+
+def test_parse_args_tu_choi_loi_dan_qua_dai() -> None:
+    """Vượt trần 4.096 của Telegram là `BadRequest` — lớp gửi coi đó là lỗi vĩnh viễn,
+    nên cả đợt chạy hết vòng, đếm đủ số đích, và KHÔNG MỘT AI nhận được gì."""
+    with pytest.raises(bc.BroadcastArgError):
+        admin_event.parse_args("x" * (bc.MAX_CONTENT_CHARS + 1))
+    assert len(admin_event.parse_args("x" * bc.MAX_CONTENT_CHARS).intro) == bc.MAX_CONTENT_CHARS
+
+
 @pytest.mark.asyncio
 async def test_send_event_tu_choi_khi_thieu_menh_gia(wired):
     """§13.5.1 điều kiện 1: quảng cáo giải mà kho rỗng là lừa người dùng."""
@@ -725,12 +768,19 @@ async def test_send_event_du_kho_thi_tao_event_va_job_draft(wired):
             await add_codes(s, code_type="event", value_vnd=value, count=3, prefix=f"E{value}")
 
     sender = FakeSender()
+    # Lời dẫn NHIỀU DÒNG, gõ đúng như admin gõ trong Telegram. Đọc từ `message.text` chứ
+    # không từ `context.args`: thư viện dựng `args` bằng `text.split()`, thứ nuốt sạch ký
+    # tự xuống dòng và biến bài đăng đã xuống dòng thành một đoạn liền.
     await admin_event.cmd_send_event(
-        make_update(admin), make_context(sender, "Giờ", "vàng", "21h!")
+        make_update(admin, text="/send_event Giờ vàng 21h!\n\nNổ hộp nhận code liền tay 🎁"),
+        make_context(sender, "Giờ", "vàng", "21h!"),
     )
 
     assert "XEM THỬ EVENT" in sender.last
     assert "Giờ vàng 21h!" in sender.last, "lời dẫn của admin phải hiện trong bản xem thử"
+    assert "Giờ vàng 21h!\n\nNổ hộp nhận code liền tay 🎁" in sender.last, (
+        "xuống dòng trong lời dẫn bị nuốt — bài đăng bị ép thành một đoạn liền"
+    )
     assert "Xác suất mở hộp" in sender.last, "khối tỉ lệ LUÔN đi kèm, không tắt được"
 
     async with db_session() as s:

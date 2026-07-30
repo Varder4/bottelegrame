@@ -397,6 +397,31 @@ async def spent_vnd(db: AsyncSession, *, event_id: int) -> int:
     return int((await db.execute(text(_SQL_SPENT), {"event_id": event_id})).scalar_one())
 
 
+# Khoá tư vấn theo ĐỢT, giữ tới hết giao dịch. Không khoá dòng `events` vì dòng đó còn bị
+# đọc bởi những đường không liên quan tới tiền (`window_origin`, bảng xem thử của admin) —
+# khoá nó là biến mọi việc đọc thành xếp hàng sau việc phát thưởng.
+#
+# Hai tham số: `pg_advisory_xact_lock(int, int)` cần một cặp int4. Số đầu là "không gian
+# tên" để khoá của đợt event không đụng khoá của thứ khác dùng chung cơ chế này về sau.
+_SQL_LOCK_EVENT_BUDGET = "SELECT pg_advisory_xact_lock(:ns, :event_id)"
+
+#: Không gian tên khoá tư vấn của trần ngân sách event. Đổi số này là đổi ý nghĩa khoá.
+_LOCK_NS_EVENT_BUDGET: Final = 0x4556  # "EV"
+
+
+async def _lock_budget(db: AsyncSession, *, event_id: int) -> None:
+    """Xếp hàng các lượt SẮP TIÊU TIỀN của cùng một đợt.
+
+    Chỉ đường thắng mới gọi hàm này. Lượt trượt — phần lớn tuyệt đối các lượt — không
+    chạm khoá, nên lúc cả nghìn người bấm cùng lúc thì hàng đợi chỉ dài bằng số người
+    trúng, không bằng số người bấm.
+    """
+    await db.execute(
+        text(_SQL_LOCK_EVENT_BUDGET),
+        {"ns": _LOCK_NS_EVENT_BUDGET, "event_id": event_id},
+    )
+
+
 async def window_origin(
     db: AsyncSession, *, event_id: int, user_id: int
 ) -> tuple[datetime, str] | None:
@@ -469,6 +494,25 @@ async def open_box(db: AsyncSession, *, event_id: int, user_id: int) -> BoxResul
     prize = draw(await prize_table(db))
     if prize.is_empty:
         return BoxResult(status="empty", reason="draw", window_source=window_source)
+
+    # ── Chốt trần, lần này là thật ──────────────────────────────────
+    # Lần đọc phía trên chỉ là cửa nhanh cho lượt trượt. Nó KHÔNG chốt được trần: giữa
+    # lúc đọc và lúc phát, hàng chục giao dịch khác cùng đọc một con số cũ rồi cùng kết
+    # luận "còn ngân sách" — mỗi lượt trúng vượt trần thêm một giải, và bot cũ đã trả tiền
+    # thật cho đúng lối này. Khoá tư vấn ép các lượt trúng đi qua đây từng cái một, nên
+    # phần vượt trần tối đa là MỘT giải, và là phần vượt cố ý (`>= cap` mới dừng).
+    await _lock_budget(db, event_id=event_id)
+    already_spent = await spent_vnd(db, event_id=event_id)
+    if already_spent >= cap_vnd:
+        log.warning(
+            "dap_hop_cham_tran_ngan_sach_sau_quay",
+            event_id=event_id,
+            user_id=user_id,
+            spent=already_spent,
+            cap=cap_vnd,
+            value_vnd=prize.value_vnd,
+        )
+        return BoxResult(status="empty", reason="budget_cap", window_source=window_source)
 
     grant = await _reserve_prize(db, event_id=event_id, user_id=user_id, prize=prize)
     if grant is None:

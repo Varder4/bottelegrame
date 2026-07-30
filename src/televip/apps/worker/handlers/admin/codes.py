@@ -46,7 +46,7 @@ from televip.core.logging import get_logger
 from televip.db.engine import session, transaction
 from televip.db.models.codes import CODE_TYPES, Code
 from televip.domain import texts
-from televip.services import code_issuance, settings_service
+from televip.services import code_issuance, settings_service, text_service
 from televip.services.admin import Handler, admin_command, write_audit
 from televip.telegram import keyboards
 
@@ -766,7 +766,9 @@ async def handle_resend_tanthu(update: Update, context: ContextTypes.DEFAULT_TYP
     game_link = await settings_service.get_str("link.game_bot", "")
     sent = await sender.send_message(
         target_id,
-        texts.code_delivered(grant.code_value, grant.value_vnd),
+        await text_service.render(
+            "code.delivered", code_value=grant.code_value, value_vnd=grant.value_vnd
+        ),
         reply_markup=keyboards.enter_code_keyboard(game_link) if game_link else None,
     )
     if sent is None:

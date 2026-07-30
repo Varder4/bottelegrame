@@ -87,6 +87,15 @@ async def _truncate_all(s: AsyncSession) -> None:
     )
     await s.commit()
 
+    # Hai bộ đệm RAM này là bản sao của `settings` và `message_templates`, hai bảng vừa bị
+    # xoá ở trên. Không dọn chúng thì một test gọi `set_content()` để lại bản ghi đè trong
+    # RAM, và test CHẠY SAU nhận câu chữ của test trước — một kiểu hỏng phụ thuộc thứ tự
+    # chạy, hiện ra rồi biến mất tuỳ theo bộ nào được chọn.
+    from televip.services import settings_service, text_service
+
+    settings_service.invalidate()
+    text_service.invalidate()
+
 
 @pytest_asyncio.fixture
 async def seeded(db: AsyncSession):

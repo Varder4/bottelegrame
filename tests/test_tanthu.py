@@ -31,7 +31,7 @@ from telegram.error import TimedOut
 from televip.apps.worker.handlers import tanthu
 from televip.db.engine import session as db_session
 from televip.domain import texts
-from televip.services import membership
+from televip.services import membership, text_service
 from tests.conftest import TEST_DATABASE_URL, _truncate_all, add_codes, make_user
 
 VERIFY_URL = "https://example.test/verify"
@@ -249,6 +249,50 @@ async def test_nut_tan_thu_chua_xac_minh_hien_buoc_1(wired):
     await tanthu.handle_tanthu(make_update(uid), make_context(sender))
 
     assert sender.last == texts.tanthu_step1()
+
+
+@pytest.mark.asyncio
+async def test_buoc_1_lay_cau_chu_tu_ban_admin_da_sua(wired):
+    """Admin sửa bản `tanthu.step1` trong `/suanoidung` thì người dùng phải thấy bản mới.
+
+    Handler từng gọi thẳng `texts.tanthu_step1()`, nên lệnh sửa nội dung báo "đã lưu",
+    bảng `message_templates` có bản mới, và người dùng vẫn nhận đúng bản cũ cứng trong
+    code — một tính năng nói dối về việc mình có tác dụng.
+    """
+    uid = 9104
+    await setup_flow(uid)
+    await text_service.set_content("tanthu.step1", "BẢN ADMIN VỪA SỬA", updated_by=uid)
+
+    sender = FakeSender()
+    await tanthu.handle_tanthu(make_update(uid), make_context(sender))
+
+    assert sender.last == "BẢN ADMIN VỪA SỬA"
+
+
+@pytest.mark.asyncio
+async def test_buoc_2_lay_cau_chu_tu_ban_admin_da_sua(wired):
+    """Cùng lý do, và thêm: ba biến của mẫu phải được truyền đủ.
+
+    Thiếu một biến là `TemplateError` ném từ giữa handler — người dùng bấm nút rồi không
+    nhận được gì cả.
+    """
+    uid = 9105
+    chat_ids = await setup_flow(uid, chats=2)
+    await verify_user(uid)
+    await set_setting("link.fanpage", "https://fb.com/televip")
+    await text_service.set_content(
+        "tanthu.step2",
+        "vào {total} nhóm:\n{invite_list}\nfanpage {fanpage_link}",
+        updated_by=uid,
+    )
+
+    sender = FakeSender()
+    await tanthu.handle_tanthu(make_update(uid), make_context(sender))
+
+    assert sender.last.startswith("vào 2 nhóm:")
+    assert "1️⃣ " in sender.last and "2️⃣ " in sender.last, "danh sách link phải giữ đánh số"
+    assert sender.last.endswith("fanpage https://fb.com/televip")
+    assert len(chat_ids) == 2
 
 
 @pytest.mark.asyncio

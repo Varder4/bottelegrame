@@ -125,7 +125,7 @@ async def handle_tanthu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
         await sender.send_message(
             chat.id,
-            texts.tanthu_step1(),
+            await text_service.render("tanthu.step1"),
             reply_markup=keyboards.verify_step1_keyboard(url),
         )
         return
@@ -138,9 +138,15 @@ async def handle_tanthu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     fanpage_link = await settings_service.get_str("link.fanpage", "")
+    invite_links = [row.invite_link for row in chats]
     await sender.send_message(
         chat.id,
-        texts.tanthu_step2([row.invite_link for row in chats], fanpage_link),
+        await text_service.render(
+            "tanthu.step2",
+            total=len(invite_links),
+            invite_list=texts.numbered_links(invite_links),
+            fanpage_link=fanpage_link,
+        ),
         reply_markup=keyboards.check_groups_keyboard(),
     )
 
@@ -159,7 +165,7 @@ async def handle_check_groups(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # TRƯỚC MỌI THỨ KHÁC (§13.3.3). `answer_callback` nuốt lỗi của chính nó nên dòng này
     # không bao giờ làm đổ luồng phía dưới.
-    await sender.answer_callback(query, texts.ALERT_CHECKING)
+    await sender.answer_callback(query, await text_service.render("alert.checking"))
 
     if not await gate.require_verified(update, context):
         return

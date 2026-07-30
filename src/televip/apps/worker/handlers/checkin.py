@@ -32,7 +32,7 @@ from telegram.ext import ContextTypes
 
 from televip.apps.worker.handlers import gate
 from televip.cache.antispam import check_cooldown
-from televip.core.errors import AlreadyClaimed, OutOfStock, RateLimited
+from televip.core.errors import AlreadyClaimed, ConfigError, OutOfStock, RateLimited
 from televip.core.logging import get_logger
 from televip.db.engine import session, transaction
 from televip.domain import texts
@@ -146,6 +146,19 @@ async def handle_redeem_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ── Callback `redeem_<value>` ───────────────────────────────────────
 
 
+async def _bao_loi_cau_hinh(
+    sender: Any, query: Any, chat_id: int, user_id: int, value_vnd: int
+) -> None:
+    """Trả lời nút rồi báo "hệ thống bận" — dùng cho mọi `ConfigError` của luồng đổi code.
+
+    Việc BẮT BUỘC ở đây là `answer_callback`: chừng nào Telegram chưa nhận được nó, nút
+    còn quay. Đó là khác biệt giữa "lỗi cấu hình, thử lại sau" và "bot treo".
+    """
+    await sender.answer_callback(query, await text_service.render("error.system_busy"))
+    await sender.send_message(chat_id, await text_service.render("error.system_busy"))
+    log.error("doi_code_loi_cau_hinh", user_id=user_id, value_vnd=value_vnd, exc_info=True)
+
+
 async def handle_redeem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     chat = update.effective_chat
@@ -178,8 +191,15 @@ async def handle_redeem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await text_service.render("error.rate_limited", seconds=exc.retry_after_seconds),
         )
         return
+    except ConfigError:
+        await _bao_loi_cau_hinh(sender, query, chat.id, tg_user.id, value_vnd)
+        return
 
-    support_link = await settings_service.get_str("link.support", "")
+    try:
+        support_link = await settings_service.get_str("link.support", "")
+    except ConfigError:
+        await _bao_loi_cau_hinh(sender, query, chat.id, tg_user.id, value_vnd)
+        return
 
     try:
         async with transaction() as db:
@@ -218,6 +238,14 @@ async def handle_redeem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except checkin_service.InvalidRedeemTier:
         await sender.answer_callback(query)
         log.warning("doi_code_bac_khong_hop_le", user_id=tg_user.id, value_vnd=value_vnd)
+        return
+    except ConfigError:
+        # `redeem()` đọc `redeem.tiers` và `checkin.points_per_day`; một giá trị hỏng ở
+        # đó ném từ TẬN TRONG giao dịch. Không có nhánh này thì ngoại lệ thoát khỏi
+        # handler, `answer_callback` không bao giờ được gọi, và nút quay vòng ~15 giây
+        # rồi báo lỗi mạng — người dùng đọc ra "bot chết", còn admin thì không thấy gì
+        # ngoài một traceback không gắn với ai.
+        await _bao_loi_cau_hinh(sender, query, chat.id, tg_user.id, value_vnd)
         return
 
     await sender.answer_callback(query, await text_service.render("alert.redeem_ok"))

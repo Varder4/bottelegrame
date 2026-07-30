@@ -227,6 +227,16 @@ def tanthu_step1() -> str:
     )
 
 
+def numbered_links(links: Sequence[str]) -> str:
+    """Danh sách link đánh số 1️⃣2️⃣3️⃣.
+
+    Là **dữ liệu** chứ không phải câu chữ: nó đi vào biến `{invite_list}` của mẫu
+    `tanthu.step2`, nên admin sửa mẫu trong `/suanoidung` vẫn không đổi được cách đánh số.
+    Để ở đây vì `_keycap` là chi tiết riêng của module này.
+    """
+    return "\n".join(f"{_keycap(i)} {link}" for i, link in enumerate(links, start=1))
+
+
 def tanthu_step2(invite_links: Sequence[str], fanpage_link: str) -> str:
     """Bước 2 — đã xác minh, liệt kê nhóm/kênh bắt buộc.
 
@@ -234,7 +244,7 @@ def tanthu_step2(invite_links: Sequence[str], fanpage_link: str) -> str:
     `len(invite_links)`, không viết cứng, vì admin thêm bớt nhóm bằng lệnh chứ không sửa
     code.
     """
-    numbered = "\n".join(f"{_keycap(i)} {link}" for i, link in enumerate(invite_links, start=1))
+    numbered = numbered_links(invite_links)
     return (
         "🎁TELEVIP - TẶNG CODE 24/7🎲\n"
         "\n"

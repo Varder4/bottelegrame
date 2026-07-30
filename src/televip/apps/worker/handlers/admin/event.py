@@ -33,6 +33,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from televip.apps.worker.handlers.admin import broadcast as bc
+from televip.apps.worker.handlers.admin import texts as admin_texts
 from televip.core.errors import ConfigError
 from televip.core.logging import get_logger
 from televip.db.engine import session, transaction
@@ -75,30 +76,50 @@ class SendEventArgs:
     force_small: bool
 
 
-def parse_args(args: list[str]) -> SendEventArgs:
-    """Tách cờ khỏi lời dẫn. Cờ lạ bị **từ chối**, không bị coi là lời dẫn.
+def parse_args(raw: str) -> SendEventArgs:
+    """Tách cờ khỏi lời dẫn, **giữ nguyên xuống dòng**. Cờ lạ bị từ chối.
+
+    Nhận chuỗi THÔ chứ không nhận `context.args`: thư viện dựng `args` bằng
+    `text.split()`, thứ nuốt sạch ký tự xuống dòng. Lời dẫn của một đợt event là nội dung
+    nhiều dòng do admin soạn, ép nó thành một đoạn liền là làm hỏng bài đăng — đúng lỗi
+    `/broadcast` đã phải sửa, đường event chỉ là chưa được che.
 
     Ném:
-        bc.BroadcastArgError: gặp cờ không hiểu.
+        bc.BroadcastArgError: gặp cờ không hiểu, hoặc lời dẫn quá dài.
     """
     audience = "active_30d"
     force_small = False
-    words: list[str] = []
+    kept: list[str] = []
 
-    for token in args:
-        if not token.startswith("--"):
-            words.append(token)
-            continue
-        if token == bc.FLAG_ALL:
-            audience = "all"
-        elif token == bc.FLAG_FORCE_SMALL:
-            force_small = True
-        else:
-            raise bc.BroadcastArgError(
-                f"Cờ không hiểu: {token} (chỉ có {bc.FLAG_ALL}, {bc.FLAG_FORCE_SMALL})"
-            )
+    # Tách theo TỪ để nhận diện cờ, nhưng ghép lại theo DÒNG để giữ bố cục.
+    for line in raw.split("\n"):
+        words: list[str] = []
+        for token in line.split(" "):
+            if not token.startswith("--"):
+                words.append(token)
+                continue
+            if token == bc.FLAG_ALL:
+                audience = "all"
+            elif token == bc.FLAG_FORCE_SMALL:
+                force_small = True
+            else:
+                raise bc.BroadcastArgError(
+                    f"Cờ không hiểu: {token} (chỉ có {bc.FLAG_ALL}, {bc.FLAG_FORCE_SMALL})"
+                )
+        kept.append(" ".join(w for w in words if w).strip())
 
-    return SendEventArgs(intro=" ".join(words).strip(), audience=audience, force_small=force_small)
+    intro = "\n".join(kept).strip()
+
+    # Chặn ngay tại đây, trước khi có tin nào bay đi. Vượt trần 4.096 của Telegram là
+    # `BadRequest`, thứ mà lớp gửi coi là lỗi vĩnh viễn nên không thử lại: cả đợt chạy
+    # hết vòng, đếm đủ số đích, và KHÔNG MỘT AI nhận được gì.
+    if len(intro) > bc.MAX_CONTENT_CHARS:
+        raise bc.BroadcastArgError(
+            f"Lời dẫn dài {len(intro):,} ký tự, trần một tin Telegram là 4.096 "
+            f"(mức an toàn {bc.MAX_CONTENT_CHARS:,}, vì khối tỉ lệ còn được nối thêm phía sau)."
+        )
+
+    return SendEventArgs(intro=intro, audience=audience, force_small=force_small)
 
 
 def build_caption(intro: str, odds_caption: str) -> str:
@@ -210,7 +231,7 @@ def render_preview(
 async def cmd_send_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Dựng event + đợt `draft`, in bản xem thử. **Không gửi gì.**"""
     try:
-        args = parse_args(list(getattr(context, "args", None) or []))
+        args = parse_args(admin_texts.raw_argument(update))
     except bc.BroadcastArgError as exc:
         await _reply(update, context, f"⚠️ {exc.hint}\n\n{USAGE}")
         return

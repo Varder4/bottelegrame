@@ -17,6 +17,7 @@ biến thứ tự commit giữa hai bên thành một cuộc đua.
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -216,6 +217,9 @@ NOT_EDITABLE: frozenset[str] = frozenset(
         "referrer_lines",
         "receiver_lines",
         "streak_lines",
+        # Danh sách link đánh số 1️⃣2️⃣3️⃣ của `tanthu.step2`: đi vào mẫu dưới dạng biến
+        # `{invite_list}` đã dựng sẵn, cùng lý do với các khối `*_lines` phía trên.
+        "numbered_links",
         # Định dạng mốc thời gian: đây là quy ước hiển thị giờ, không phải câu chữ. Cho sửa
         # nghĩa là cho phép đổi cách hệ thống đọc một con số.
         "vn_time",
@@ -689,3 +693,103 @@ def test_commands_xuat_du_bon_lenh() -> None:
         "suanoidung",
         "resetnoidung",
     }
+
+
+# ── Lớp sửa-được không được có đường vòng ───────────────────────────
+
+
+def _ten_cau_chu_sua_duoc() -> dict[str, set[str]]:
+    """`tên trong domain/texts.py` → tập khoá dùng nó, đọc thẳng từ `_SPECS`.
+
+    Đọc từ nguồn chứ không viết tay: một khoá mới thêm vào `_SPECS` là tự động được bảo
+    vệ, không cần ai nhớ cập nhật test.
+
+    Là **tập** khoá chứ không phải một khoá, vì một hàm nuôi nhiều khoá được:
+    `texts.countdown()` là bản mặc định của cả `referral.countdown_running` lẫn
+    `referral.countdown_ended`.
+    """
+    import ast
+
+    def ten_texts(node: ast.AST) -> set[str]:
+        return {
+            con.attr
+            for con in ast.walk(node)
+            if isinstance(con, ast.Attribute)
+            and isinstance(con.value, ast.Name)
+            and con.value.id == "texts"
+        }
+
+    tree = ast.parse(Path(text_service.__file__).read_text(encoding="utf-8"))
+
+    # Vài bản mặc định được dựng sẵn thành hằng ở đầu module (`_COUNTDOWN = texts.countdown(…)`)
+    # rồi mới đưa vào `_spec`. Không lần theo bước gán này thì hàm đó trông như chưa ai dùng.
+    bi_danh: dict[str, set[str]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and (ten := ten_texts(node.value)):
+            for dich in node.targets:
+                if isinstance(dich, ast.Name):
+                    bi_danh[dich.id] = ten
+
+    ket_qua: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_spec"):
+            continue
+        if not (node.args and isinstance(node.args[0], ast.Constant)):
+            continue
+        khoa = node.args[0].value
+        ten = set(ten_texts(node))
+        for con in ast.walk(node):
+            if isinstance(con, ast.Name) and con.id in bi_danh:
+                ten |= bi_danh[con.id]
+        for t in ten:
+            ket_qua.setdefault(t, set()).add(khoa)
+    return ket_qua
+
+
+def test_bang_ten_sua_duoc_doc_duoc_va_khop_voi_bang_ham() -> None:
+    """Nếu cách đọc trên hỏng, bài kiểm dưới sẽ xanh một cách vô nghĩa."""
+    sua_duoc = _ten_cau_chu_sua_duoc()
+    assert len(sua_duoc) >= len(FUNCTION_TO_KEY), "đọc `_SPECS` hỏng — bảng rỗng hoặc thiếu"
+    for ten, khoa in FUNCTION_TO_KEY.items():
+        assert khoa in sua_duoc.get(ten, set()), (
+            f"{ten} khai `{khoa}` nhưng `_SPECS` nói {sorted(sua_duoc.get(ten, set()))}"
+        )
+
+
+def test_khong_handler_nao_goi_thang_cau_chu_sua_duoc() -> None:
+    """Mọi câu chữ có khoá phải đi qua `text_service.render()`.
+
+    Đây là bài kiểm chặn cả một LỚP lỗi, không phải một lỗi: gọi thẳng
+    `texts.tanthu_step1()` trong handler vẫn chạy, vẫn qua mọi test khác, và vẫn khiến
+    `/suanoidung` báo "đã lưu" trong khi người dùng nhận đúng bản cũ cứng trong code —
+    một tính năng nói dối về việc mình có tác dụng. Bốn chỗ như vậy đã lọt vào lần trước.
+
+    Chỉ soi `apps/` (handler + web). `domain/texts.py` tự gọi hàm của chính nó, còn
+    `services/text_service.py` phải gọi để lấy bản mặc định.
+    """
+    import ast
+
+    src_root = Path(__file__).resolve().parents[1] / "src" / "televip"
+    # Trừ `NOT_EDITABLE`: `format_vnd`, `value_label`, các khối `*_lines`… có mặt trong
+    # `_SPECS` vì chúng dựng bản mặc định mẫu, nhưng bản thân chúng là quy tắc định dạng
+    # chứ không phải câu chữ — handler gọi thẳng là đúng.
+    sua_duoc = {k: v for k, v in _ten_cau_chu_sua_duoc().items() if k not in NOT_EDITABLE}
+
+    vi_pham: list[str] = []
+    for path in sorted((src_root / "apps").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            # Chỉ bắt `texts.<tên>`; `from ... import texts` là cách duy nhất module này
+            # được nhập trong toàn bộ `apps/`.
+            if not isinstance(node, ast.Attribute):
+                continue
+            if not (isinstance(node.value, ast.Name) and node.value.id == "texts"):
+                continue
+            if node.attr in sua_duoc:
+                rel = path.relative_to(src_root).as_posix()
+                khoa = " / ".join(sorted(sua_duoc[node.attr]))
+                vi_pham.append(f"{rel}:{node.lineno} texts.{node.attr} → render({khoa!r})")
+
+    assert vi_pham == [], (
+        "handler gọi thẳng câu chữ sửa-được, bỏ qua bản admin đã sửa:\n  " + "\n  ".join(vi_pham)
+    )
