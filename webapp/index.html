@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<title>Xác minh · TELEVIP</title>
+
+<!--
+  Gốc của API. Để rỗng = cùng origin với trang này (cách triển khai chính thức: FastAPI
+  phục vụ luôn thư mục webapp/). Chỉ điền khi static và API nằm khác host — ví dụ lúc
+  chạy thử cục bộ, xem webapp/README.md.
+-->
+<meta name="televip-api-base" content="">
+
+<link rel="stylesheet" href="./style.css">
+
+<!--
+  Tài nguyên ngoài DUY NHẤT của trang này. Nạp đồng bộ, đặt trước app.js, để
+  window.Telegram chắc chắn tồn tại khi app.js chạy.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+
+<main class="card">
+
+  <header class="head">
+    <div class="head__icon" aria-hidden="true">🤖</div>
+    <h1 class="head__title">Xác minh bạn không phải robot</h1>
+    <p class="head__sub">✅ Chỉ mất 5 giây · 🔒 An toàn &amp; bảo mật</p>
+  </header>
+
+  <p class="notice" id="notice" hidden></p>
+
+  <!--
+    Phép tính do MÁY CHỦ sinh và chấm. Trang này chỉ hiển thị chuỗi nhận được và gửi
+    đáp án người dùng gõ đi. Không có phép tính nào chạy trong JavaScript.
+  -->
+  <section class="quiz" aria-labelledby="quizLabel">
+    <h2 class="visually-hidden" id="quizLabel">Phép tính cần giải</h2>
+    <p class="quiz__question" id="question" aria-live="polite">…</p>
+  </section>
+
+  <form class="form" id="form" novalidate>
+    <label class="form__label" for="answer">Nhập kết quả phép tính</label>
+    <input
+      class="form__input"
+      id="answer"
+      name="answer"
+      type="text"
+      inputmode="numeric"
+      pattern="-?[0-9]*"
+      maxlength="5"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck="false"
+      enterkeyhint="done"
+      placeholder="?"
+      aria-describedby="status"
+      disabled>
+    <button class="form__submit" id="submit" type="submit" disabled>
+      <span class="spinner" id="spinner" aria-hidden="true"></span>
+      <span id="submitLabel">Kiểm tra</span>
+    </button>
+  </form>
+
+  <div class="status" id="status" role="status" aria-live="polite" hidden>
+    <p class="status__title" id="statusTitle" hidden></p>
+    <p class="status__text" id="statusText"></p>
+    <a class="status__link" id="statusLink" target="_blank" rel="noopener noreferrer" hidden>
+      💬 Liên hệ CSKH
+    </a>
+  </div>
+
+  <footer class="foot">
+    <p>🎁 Xác thực xong nhận ngay CODE!</p>
+  </footer>
+
+</main>
+
+<script src="./app.js"></script>
+</body>
+</html>

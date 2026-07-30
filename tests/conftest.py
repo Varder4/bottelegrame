@@ -18,10 +18,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 os.environ.setdefault("TELEVIP_ENV", "dev")
 
+# Database RIÊNG cho test — tuyệt đối không dùng chung với database của bot dev.
+# Mỗi test chạy `TRUNCATE` trên toàn bộ 40 bảng, nên trỏ nhầm sang database thật là
+# xoá sạch người dùng thật chỉ bằng một lần gõ `pytest`.
 TEST_DATABASE_URL = os.environ.get(
     "TELEVIP_TEST_DATABASE_URL",
-    "postgresql+asyncpg://televip:televip_dev_only@127.0.0.1:5433/televip",
+    "postgresql+asyncpg://televip:televip_dev_only@127.0.0.1:5433/televip_test",
 )
+
+if not TEST_DATABASE_URL.rsplit("/", 1)[-1].endswith("_test"):
+    raise RuntimeError(
+        f"Database test phải có tên kết thúc bằng '_test', đang là: {TEST_DATABASE_URL!r}. "
+        "Chặn ở đây vì bước tiếp theo là TRUNCATE toàn bộ bảng."
+    )
 
 
 @pytest_asyncio.fixture
@@ -123,3 +132,25 @@ async def add_codes(
 @pytest.fixture(scope="session")
 def anyio_backend():
     return "asyncio"
+
+
+#: Redis database 15 — tách khỏi database 0 mà bot dev đang dùng, vì fixture dưới đây
+#: gọi `flushdb()`.
+TEST_REDIS_URL = os.environ.get("TELEVIP_TEST_REDIS_URL", "redis://127.0.0.1:6380/15")
+
+
+@pytest_asyncio.fixture
+async def redis_clean():
+    """Redis sạch cho test nào cần trạng thái thật (chống phát lại, cooldown, rate limit).
+
+    Client mới cho từng test vì connection pool gắn với event loop đã tạo ra nó, mà
+    pytest-asyncio thì tạo loop riêng cho mỗi test.
+    """
+    from types import SimpleNamespace
+
+    from televip.cache.client import close_redis, init_redis
+
+    client = init_redis(SimpleNamespace(redis_url=TEST_REDIS_URL))  # type: ignore[arg-type]
+    await client.flushdb()
+    yield client
+    await close_redis()

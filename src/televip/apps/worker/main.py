@@ -12,13 +12,24 @@ from __future__ import annotations
 import asyncio
 
 from telegram import BotCommand, Update
-from telegram.ext import Application, CommandHandler
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    ChatMemberHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from televip.apps.worker.handlers.start import handle_start
+from televip.apps.worker.handlers.tanthu import handle_check_groups, handle_tanthu
 from televip.cache.client import close_redis, init_redis
 from televip.core.config import get_settings
 from televip.core.logging import get_logger, setup_logging
 from televip.db.engine import dispose_engine, init_engine
+from televip.services.membership import handle_chat_member_update
+from televip.telegram import keyboards
 from televip.telegram.sender import Sender
 
 log = get_logger(__name__)
@@ -60,7 +71,38 @@ def build_application() -> Application:
 
     app.add_handler(CommandHandler("start", handle_start))
 
+    # `filters.Text([...])` so khớp BẰNG NHAU TUYỆT ĐỐI với nhãn nút. Bot cũ dùng
+    # `"Game" in text` nên mọi tin nhắn chứa chữ đó rơi nhầm handler (`keyboards.py`).
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & filters.Text([keyboards.BTN_CODE_TAN_THU]),
+            handle_tanthu,
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(handle_check_groups, pattern=f"^{keyboards.CB_CHECK_GROUPS}$")
+    )
+    # Nguồn cập nhật `group_memberships`, 0 lời gọi API. Phải đi cùng `ALLOWED_UPDATES`
+    # bên dưới — thiếu một trong hai là bảng đóng băng vĩnh viễn mà không có dòng lỗi nào.
+    app.add_handler(ChatMemberHandler(handle_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
+
+    # Lưới an toàn, PHẢI đứng cuối cùng: mọi callback chưa có handler riêng vẫn được
+    # `answerCallbackQuery`. Thiếu nó thì nút bấm quay vòng tới khi Telegram tự huỷ query
+    # và người dùng bấm lại — đúng hành vi đặc tả §13.3.3 cấm. Handler này chỉ trả lời
+    # cho nút, không làm gì khác, nên nút chưa nối vẫn im lặng đúng nghĩa chứ không treo.
+    app.add_handler(CallbackQueryHandler(_answer_unhandled_callback))
+
     return app
+
+
+async def _answer_unhandled_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+    log.info("callback_chua_noi", data=query.data)
+    await context.application.bot_data["sender"].answer_callback(
+        query, "Chức năng này đang được hoàn thiện."
+    )
 
 
 #: `chat_member` phải khai tường minh: Telegram KHÔNG gửi loại update này nếu không xin.
