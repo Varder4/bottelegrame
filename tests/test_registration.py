@@ -248,11 +248,7 @@ async def test_job_don_ma_giu_cho_chay_duoc_khi_khong_co_gi_de_don(wired_db) -> 
 #: `admin_permissions`, nên mọi lệnh ở đây đang được quảng cáo với admin trong khi gõ vào
 #: thì không có gì xảy ra. Xây xong một lệnh thì XOÁ nó khỏi đây — nếu quên xoá, bài kiểm
 #: dưới sẽ đỏ và nhắc.
-CHUA_XAY: frozenset[str] = frozenset(
-    {
-        "/checkip",  # cần lớp chống gian lận (GĐ4B): signal_owners, risk_assessments
-    }
-)
+CHUA_XAY: frozenset[str] = frozenset({})
 
 
 def _lenh_duoc_cap_quyen() -> set[str]:
