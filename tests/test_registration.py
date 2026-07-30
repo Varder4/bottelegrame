@@ -300,3 +300,153 @@ def test_khong_handler_nao_chay_ma_khong_co_quyen() -> None:
     co_handler = {f"/{name}" for name, _ in main.admin_command_handlers()}
     thua = co_handler - _lenh_duoc_cap_quyen()
     assert thua == set(), f"có handler nhưng không ai được cấp quyền: {sorted(thua)}"
+
+
+# ── Menu lệnh riêng của từng admin ──────────────────────────────────
+#
+# Ghi chú của `PUBLIC_COMMANDS` hứa "lệnh admin chỉ hiện với từng admin qua
+# `BotCommandScopeChat`", nhưng suốt một thời gian **không có dòng code nào làm việc đó**:
+# menu của admin chỉ có /start và /help, còn 33 lệnh vận hành thì phải thuộc lòng mới gõ
+# được. Một lệnh không ai tìm thấy thì cũng như chưa xây.
+
+
+class FakeBot:
+    """Ghi lại mọi lời gọi `set_my_commands`, kèm scope."""
+
+    def __init__(self, *, fail_for: set[int] | None = None) -> None:
+        self.calls: list[tuple[Any, list[Any]]] = []
+        self.fail_for = fail_for or set()
+
+    async def set_my_commands(self, commands: Any, scope: Any = None) -> None:
+        chat_id = getattr(scope, "chat_id", None)
+        if chat_id in self.fail_for:
+            from telegram.error import BadRequest
+
+            raise BadRequest("chat not found")
+        self.calls.append((scope, list(commands)))
+
+
+def _menu_for(bot: FakeBot, user_id: int) -> list[str]:
+    for scope, cmds in bot.calls:
+        if getattr(scope, "chat_id", None) == user_id:
+            return [c.command for c in cmds]
+    return []
+
+
+async def _them_admin(user_id: int, role: str, commands: tuple[str, ...]) -> None:
+    async with db_session() as s:
+        await s.execute(
+            text("INSERT INTO users (user_id, username) VALUES (:u, :n) ON CONFLICT DO NOTHING"),
+            {"u": user_id, "n": f"u{user_id}"},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO admin_users (user_id, role, added_by) VALUES (:u, :r, :u) "
+                "ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role, revoked_at = NULL"
+            ),
+            {"u": user_id, "r": role},
+        )
+        for cmd in commands:
+            await s.execute(
+                text(
+                    "INSERT INTO admin_permissions (role, command) VALUES (:r, :c) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {"r": role, "c": cmd},
+            )
+        await s.commit()
+
+
+async def test_menu_admin_sinh_tu_quyen_that(wired_db) -> None:
+    """Menu đọc từ `admin_permissions` — cùng nguồn với `/help_admin`, nên không trôi khác."""
+    await _them_admin(970_001, "owner", ("/stats", "/baocao", "/del_all_code"))
+    await _them_admin(970_002, "cskh", ("/stats",))
+
+    bot = FakeBot()
+    so = await main.refresh_admin_menus(SimpleNamespace(bot=bot))  # type: ignore[arg-type]
+
+    assert so == 2
+    assert _menu_for(bot, 970_001) == ["baocao", "del_all_code", "stats"]
+    assert _menu_for(bot, 970_002) == ["stats"], "cskh không được thấy lệnh của owner"
+
+
+async def test_menu_admin_bo_qua_nguoi_da_thu_hoi_quyen(wired_db) -> None:
+    await _them_admin(970_010, "owner", ("/stats",))
+    async with db_session() as s:
+        await s.execute(text("UPDATE admin_users SET revoked_at = now() WHERE user_id = 970010"))
+        await s.commit()
+
+    bot = FakeBot()
+    assert await main.refresh_admin_menus(SimpleNamespace(bot=bot)) == 0  # type: ignore[arg-type]
+    assert bot.calls == []
+
+
+async def test_mot_admin_chua_start_khong_lam_hong_menu_nguoi_khac(wired_db) -> None:
+    """Telegram từ chối đặt scope cho người chưa mở chat riêng. Đó là chuyện thường."""
+    await _them_admin(970_020, "owner", ("/stats",))
+    await _them_admin(970_021, "owner", ("/stats",))
+
+    bot = FakeBot(fail_for={970_020})
+    so = await main.refresh_admin_menus(SimpleNamespace(bot=bot))  # type: ignore[arg-type]
+
+    assert so == 1, "một admin chưa /start làm cả vòng đặt menu dừng lại"
+    assert _menu_for(bot, 970_021) == ["stats"]
+
+
+async def test_menu_khong_bao_gio_co_mo_ta_rong(wired_db) -> None:
+    """Telegram từ chối cả danh sách nếu một mô tả rỗng — lệnh lạ phải có đường lui."""
+    await _them_admin(970_030, "owner", ("/stats", "/mot_lenh_chua_co_trong_bang"))
+
+    bot = FakeBot()
+    await main.refresh_admin_menus(SimpleNamespace(bot=bot))  # type: ignore[arg-type]
+
+    _, cmds = bot.calls[-1]
+    assert all(c.description for c in cmds), "mô tả rỗng làm Telegram từ chối CẢ menu"
+
+
+def test_moi_lenh_co_handler_deu_co_mo_ta_cho_menu() -> None:
+    """Thiếu dòng trong `COMMAND_SYNTAX` thì lệnh vào menu với mô tả là chính tên nó.
+
+    Không hỏng, nhưng vô dụng — admin nhìn `del_all_code` mà không biết nó làm gì. Bài
+    kiểm này giữ cho bảng cú pháp không tụt lại sau khi thêm lệnh mới.
+    """
+    from televip.apps.worker.handlers.admin import ops as admin_ops
+
+    thieu = [
+        name
+        for name, _ in main.admin_command_handlers()
+        if f"/{name}" not in admin_ops.COMMAND_SYNTAX
+    ]
+    assert thieu == [], f"lệnh chưa có mô tả trong COMMAND_SYNTAX: {sorted(thieu)}"
+
+
+async def test_set_menu_cho_mot_nguoi_theo_quyen_hien_tai(wired_db) -> None:
+    await _them_admin(970_040, "cskh", ("/stats", "/user"))
+
+    bot = FakeBot()
+    assert await main.set_menu_for_user(SimpleNamespace(bot=bot), 970_040) is True  # type: ignore[arg-type]
+    assert _menu_for(bot, 970_040) == ["stats", "user"]
+
+
+async def test_set_menu_cho_nguoi_khong_con_quyen_thi_XOA_menu(wired_db) -> None:
+    """Người vừa bị thu hồi vẫn thấy nguyên menu cũ là menu đang quảng cáo thứ họ không dùng được."""
+    await _them_admin(970_050, "owner", ("/stats", "/baocao"))
+    async with db_session() as s:
+        await s.execute(text("UPDATE admin_users SET revoked_at = now() WHERE user_id = 970050"))
+        await s.commit()
+    from televip.services import admin as admin_service
+
+    admin_service.invalidate_role(970_050)
+
+    bot = FakeBot()
+    await main.set_menu_for_user(SimpleNamespace(bot=bot), 970_050)  # type: ignore[arg-type]
+
+    assert _menu_for(bot, 970_050) == [], "menu phải rỗng — Telegram khi đó rơi về /start, /help"
+    assert bot.calls, "phải GỌI set_my_commands với danh sách rỗng, không phải bỏ qua"
+
+
+async def test_set_menu_nguoi_chua_start_thi_tra_False_chu_khong_nem(wired_db) -> None:
+    await _them_admin(970_060, "owner", ("/stats",))
+
+    bot = FakeBot(fail_for={970_060})
+    assert await main.set_menu_for_user(SimpleNamespace(bot=bot), 970_060) is False  # type: ignore[arg-type]

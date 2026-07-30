@@ -863,3 +863,45 @@ async def test_del_all_code_nguoi_khong_co_quyen_van_duoc_TRA_LOI_nut(wired, red
     assert sender.answers == [""], "callback không được trả lời — nút quay vòng"
     assert sender.messages == [], "không được rò rỉ sự tồn tại của lệnh"
     assert await scalar("SELECT count(*) FROM codes WHERE status = 'available'") == 3
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_bam_HUY_roi_bam_XOA_thi_duoc_giai_thich(owner_redis):
+    """Huỷ cũng ĐỐT vé — hai nút vẫn nằm đó nên phải nói ra, kèm bước kế tiếp.
+
+    Không nói thì admin bấm nhầm HUỶ rồi bấm XOÁ NGAY ngay bên cạnh sẽ nhận "đề nghị đã
+    hết hạn" và không hiểu vì sao: cái nút trông vẫn còn dùng được.
+    """
+    await _du_kho(code_type="event", value_vnd=5_000, count=3, prefix="E5")
+    sender_go, ok = await _de_nghi(owner_redis, "event")
+    huy = sender_go.markups[-1].inline_keyboard[0][1].callback_data
+
+    s_huy = await _bam(owner_redis, huy)
+    assert "không còn tác dụng" in s_huy.last
+    assert "/del_all_code event" in s_huy.last, "phải chỉ đúng lệnh gõ lại, kèm phạm vi"
+
+    s_sau = await _bam(owner_redis, ok)
+    assert "hết hạn hoặc đã được bấm rồi" in s_sau.last
+    assert await scalar("SELECT count(*) FROM codes WHERE status = 'available'") == 3
+
+
+@pytest.mark.asyncio
+async def test_del_all_code_tu_choi_luc_bam_thi_chi_ro_buoc_ke_tiep(owner_redis):
+    """Từ chối mà không chỉ đường ra thì admin kẹt: vé đã bị đốt, nút cũ vô dụng."""
+    await set_setting("admin.dual_approval_threshold_vnd", 1_000_000, "money_vnd")
+    await _du_kho(code_type="event", value_vnd=5_000, count=1, prefix="NHO")
+    _, data = await _de_nghi(owner_redis, "event")
+    await _du_kho(code_type="event", value_vnd=88_000, count=200, prefix="TO")
+
+    sender = await _bam(owner_redis, data)
+
+    assert "TỪ CHỐI" in sender.last
+    assert "lọc mệnh giá" in sender.last, "không chỉ cách thu hẹp thì admin không có đường ra"
+    assert "không còn tác dụng" in sender.last, "vé đã bị đốt mà nút vẫn nằm đó"
+
+    # ...và lối ra được chỉ phải THẬT SỰ chạy được.
+    sender_hep, data_hep = await _de_nghi(owner_redis, "event", "5k")
+    assert data_hep is not None, "lối ra được chỉ lại bị từ chối tiếp"
+    await _bam(owner_redis, data_hep)
+    assert await scalar("SELECT count(*) FROM codes WHERE status = 'revoked'") == 1
+    assert await scalar("SELECT count(*) FROM codes WHERE status = 'available'") == 200

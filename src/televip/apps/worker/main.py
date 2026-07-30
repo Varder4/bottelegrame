@@ -27,7 +27,9 @@ import pkgutil
 from typing import Final
 
 from sqlalchemy import text
-from telegram import BotCommand, Update
+from sqlalchemy.ext.asyncio import AsyncSession
+from telegram import BotCommand, BotCommandScopeChat, Update
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -49,6 +51,7 @@ from televip.cache.client import close_redis, init_redis
 from televip.core.config import get_settings
 from televip.core.logging import get_logger, setup_logging
 from televip.db.engine import dispose_engine, init_engine, session, transaction
+from televip.services import admin as admin_service
 from televip.services import broadcast as broadcast_service
 from televip.services import code_issuance, settings_service, stats
 from televip.services.admin import Handler
@@ -466,8 +469,103 @@ async def _stop_outbox_worker(app: Application) -> None:
     log.info("outbox_worker_da_dung")
 
 
+#: Trần của Telegram cho mô tả một lệnh trong menu. Vượt là `BadRequest` cho CẢ danh sách.
+_MENU_DESC_MAX: Final = 256
+
+_SQL_ADMIN_MENU = """
+SELECT a.user_id, a.role
+  FROM admin_users a
+ WHERE a.revoked_at IS NULL
+"""
+
+
+def _menu_description(command: str) -> str:
+    """Mô tả ngắn cho menu, lấy từ bảng cú pháp của `/help_admin`.
+
+    Bảng ấy viết dạng `"/users [n] — danh sách user mới nhất"`; menu Telegram đã hiện sẵn
+    tên lệnh nên chỉ lấy phần sau dấu gạch. Lệnh chưa có dòng nào trong bảng vẫn vào được
+    menu, chỉ là mô tả rỗng — thà thế còn hơn biến mất khỏi menu.
+    """
+    raw = admin_ops.COMMAND_SYNTAX.get(command, "")
+    _, sep, tail = raw.partition("—")
+    return (tail if sep else raw).strip()[:_MENU_DESC_MAX]
+
+
+async def _menu_cua_vai_tro(db: AsyncSession, role: str) -> list[BotCommand]:
+    """Menu của một vai trò, đọc từ `admin_permissions`."""
+    names = await admin_service.commands_for_role(db, role)
+    return [
+        BotCommand(name.lstrip("/"), _menu_description(name) or name.lstrip("/"))
+        for name in sorted(names)
+    ]
+
+
+async def set_menu_for_user(app: Application, user_id: int) -> bool:
+    """Đặt (hoặc xoá) menu lệnh của ĐÚNG một người theo quyền hiện tại của họ.
+
+    Gọi ngay sau `/admin_add` và `/admin_del`. Không có nó thì người vừa được cấp quyền
+    nhìn vào một menu trống cho tới lần restart kế tiếp, còn người vừa bị THU HỒI quyền
+    vẫn thấy nguyên 33 lệnh trong menu — bấm vào thì bot im lặng (đúng luật), nhưng cái
+    menu đó vẫn đang quảng cáo những thứ họ không còn được dùng.
+
+    Trả `False` khi Telegram từ chối (người này chưa từng mở chat riêng với bot) — đó là
+    chuyện thường, không phải lỗi, nên nơi gọi không cần xử lý gì.
+    """
+    async with session() as db:
+        role = await admin_service.get_role(db, user_id)
+        menu = await _menu_cua_vai_tro(db, role) if role else []
+
+    try:
+        # Không còn quyền ⇒ đặt danh sách RỖNG cho scope này. Telegram khi đó rơi về menu
+        # mặc định (`/start`, `/help`), đúng thứ một người dùng thường phải thấy.
+        await app.bot.set_my_commands(menu, scope=BotCommandScopeChat(user_id))
+    except TelegramError as exc:
+        log.warning("menu_admin_that_bai", user_id=user_id, loi=str(exc))
+        return False
+    return True
+
+
+async def refresh_admin_menus(app: Application) -> int:
+    """Đặt menu lệnh RIÊNG cho từng admin qua `BotCommandScopeChat`. Trả số admin đã đặt.
+
+    Trước bản này, ghi chú của `PUBLIC_COMMANDS` hứa "lệnh admin chỉ hiện với từng admin
+    qua `BotCommandScopeChat`" nhưng **không có dòng code nào làm việc đó** — menu của
+    admin chỉ có `/start` và `/help`, còn 33 lệnh vận hành thì phải thuộc lòng mới gõ được.
+    Một lệnh không ai tìm thấy thì cũng như chưa xây.
+
+    Danh sách lấy từ `admin_permissions` theo vai trò — cùng một nguồn với `/help_admin`,
+    nên menu không thể trôi khác bản in ra.
+
+    Chạy lúc khởi động cho TẤT CẢ admin. `/admin_add` và `/admin_del` gọi
+    `set_menu_for_user()` để cập nhật ngay đúng một người, không phải chờ restart.
+    """
+    async with session() as db:
+        admins = (await db.execute(text(_SQL_ADMIN_MENU))).all()
+        theo_vai_tro: dict[str, list[BotCommand]] = {
+            role: await _menu_cua_vai_tro(db, role) for role in {row.role for row in admins}
+        }
+
+    da_dat = 0
+    for row in admins:
+        menu = theo_vai_tro.get(row.role, [])
+        if not menu:
+            continue
+        try:
+            await app.bot.set_my_commands(menu, scope=BotCommandScopeChat(row.user_id))
+        except TelegramError as exc:
+            # Admin chưa từng mở chat riêng với bot ⇒ Telegram từ chối đặt scope. Đó là
+            # chuyện bình thường, không phải lỗi khởi động: nuốt và đi tiếp, nếu không thì
+            # MỘT admin chưa /start làm cả menu của những người còn lại không được đặt.
+            log.warning("menu_admin_that_bai", user_id=row.user_id, loi=str(exc))
+            continue
+        da_dat += 1
+    return da_dat
+
+
 async def _on_startup(app: Application) -> None:
     await app.bot.set_my_commands(PUBLIC_COMMANDS)
+    so_menu = await refresh_admin_menus(app)
+    log.info("menu_admin_da_dat", so_admin=so_menu)
     me = await app.bot.get_me()
     _start_outbox_worker(app)
     # Chu kỳ job đọc từ `settings`, tức từ database — nên phải đặt ở đây chứ không ở

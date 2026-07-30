@@ -865,7 +865,16 @@ async def _del_all_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     pham_vi = f"{code_type}" + (f" · {texts.value_label(value_vnd)}" if value_vnd else " · TẤT CẢ")
 
     if hanh_dong == "no":
-        await sender.send_message(chat_id, f"🛑 Đã huỷ. Không mã nào bị đụng tới: {pham_vi}")
+        # Huỷ cũng ĐỐT vé (đã `GETDEL` phía trên). Nói ra, nếu không admin bấm nhầm "HUỶ"
+        # rồi bấm "XOÁ NGAY" ngay bên cạnh sẽ nhận câu "đề nghị đã hết hạn" và không hiểu
+        # vì sao — cái nút vẫn nằm đó trông như còn dùng được.
+        await sender.send_message(
+            chat_id,
+            f"🛑 Đã huỷ. Không mã nào bị đụng tới: {pham_vi}\n\n"
+            f"Đề nghị này đã đóng — hai nút phía trên không còn tác dụng.\n"
+            f"👉 Muốn thu hồi thì gõ lại /del_all_code {code_type}"
+            f"{' ' + texts.value_label(value_vnd).lower() if value_vnd else ''}",
+        )
         return
 
     # Kiểm trần LẦN THỨ HAI, trên kho của ngay lúc này. Chỉ kiểm ở bước gõ lệnh thì cái
@@ -885,7 +894,10 @@ async def _del_all_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"Kho của phạm vi {pham_vi} hiện là {texts.format_vnd(hien_tai.tong_vnd)}đ "
             f"({hien_tai.so_ma:,} mã), vượt ngưỡng duyệt hai người "
             f"{texts.format_vnd(threshold)}đ.\n\n"
-            f"Lúc tạo đề nghị phạm vi này còn nằm trong ngưỡng ({so_ma_da_hien:,} mã).",
+            f"Lúc tạo đề nghị phạm vi này còn nằm trong ngưỡng ({so_ma_da_hien:,} mã) — "
+            f"kho đã lớn lên trong lúc chờ.\n\n"
+            f"👉 Thu hẹp bằng cách lọc mệnh giá: /del_all_code {code_type} 10k\n"
+            f"👉 Đề nghị cũ đã đóng; hai nút phía trên không còn tác dụng.",
         )
         log.warning(
             "xoa_hang_loat_nut_vuot_nguong",

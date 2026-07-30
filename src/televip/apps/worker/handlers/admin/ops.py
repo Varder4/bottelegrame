@@ -119,6 +119,11 @@ COMMAND_SYNTAX: Final[dict[str, str]] = {
     "/admin_add": "/admin_add <user_id> <owner|admin|cskh|ketoan> — cấp quyền admin",
     "/admin_del": "/admin_del <user_id> — thu hồi quyền admin",
     "/chiendich": "/chiendich <start|end|extend> … — quản lý chiến dịch mời bạn",
+    "/broadcast_cancel": "/broadcast_cancel <job_id> — huỷ hẳn một đợt",
+    "/noidung": "/noidung [tiền_tố] — danh sách tin nhắn sửa được",
+    "/xemnoidung": "/xemnoidung <khoá> — xem bản đang chạy + biến bắt buộc",
+    "/suanoidung": "/suanoidung <khoá> <nội dung> — sửa một tin nhắn",
+    "/resetnoidung": "/resetnoidung <khoá> — về bản mặc định",
 }
 
 #: `12.000.000` → 12000000. Chỉ khớp khi MỌI nhóm sau dấu chấm đúng ba chữ số, nên `1.5`
@@ -807,11 +812,33 @@ async def cmd_admin_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
+    await _cap_nhat_menu(context, user_id)
+
     if change.old_role is None:
         body = f"👑 ĐÃ CẤP QUYỀN\n\n🆔 {user_id}\n🎖 Vai trò: {role}"
     else:
         body = f"👑 ĐÃ ĐỔI VAI TRÒ\n\n🆔 {user_id}\n📤 Cũ: {change.old_role}\n📥 Mới: {role}"
     await _reply(update, context, f"{body}\n👮 Người thao tác: {actor}")
+
+
+async def _cap_nhat_menu(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    """Đặt lại menu lệnh của một người ngay sau khi quyền của họ đổi.
+
+    Nhập cục bộ để tránh vòng nhập: `apps/worker/main.py` đã nhập module này ở đầu file.
+
+    Không có bước này thì người vừa được cấp quyền nhìn vào một menu trống cho tới lần
+    restart kế tiếp, còn người vừa bị THU HỒI vẫn thấy nguyên 33 lệnh — bấm vào thì bot im
+    lặng (đúng luật), nhưng menu vẫn đang quảng cáo những thứ họ không còn được dùng.
+
+    Nuốt mọi lỗi: quyền đã ghi vào database rồi, và một lời gọi Telegram hỏng không được
+    phép làm `/admin_add` trông như đã thất bại.
+    """
+    from televip.apps.worker import main as worker_main
+
+    try:
+        await worker_main.set_menu_for_user(context.application, user_id)
+    except Exception as exc:  # noqa: BLE001 — xem docstring
+        log.warning("cap_nhat_menu_that_bai", user_id=user_id, loi=str(exc))
 
 
 @admin_command("/admin_del")
@@ -835,6 +862,8 @@ async def cmd_admin_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if change.unchanged:
         await _reply(update, context, f"ℹ️ User {user_id} hiện không phải admin đang hoạt động.")
         return
+
+    await _cap_nhat_menu(context, user_id)
     await _reply(
         update,
         context,
