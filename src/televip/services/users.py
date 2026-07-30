@@ -101,7 +101,11 @@ def parse_referral_payload(payload: str | None) -> int | None:
     if not payload or not payload.startswith("ref_"):
         return None
     raw = payload[4:]
-    if not raw.isdigit():
+    # `isdecimal` chứ không `isdigit`: `"²".isdigit()` là True nhưng `int("²")` ném
+    # `ValueError`. Đường tới đây là `/start ref_²` của một người dùng THƯỜNG, và
+    # không có `add_error_handler` nào trong source — ngoại lệ thoát ra thì người đó
+    # không nhận được tin chào, không có dòng `users`, và không ai biết.
+    if not raw.isdecimal():
         return None
     value = int(raw)
     return value if value > 0 else None

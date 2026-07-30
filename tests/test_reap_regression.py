@@ -15,6 +15,7 @@ job đó lại là thứ được thêm vào để bảo vệ kho.
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import event as sa_event
 from sqlalchemy import text
 
 from televip.core.errors import AlreadyClaimed
@@ -142,3 +143,154 @@ async def test_grant_da_bi_thu_hoi_thi_khong_tu_gan_lai(seeded, session_factory)
 
     with pytest.raises(AlreadyClaimed):
         await _reserve(session_factory, user_id=9300, key="tanthu:9300")
+
+
+# ── Hai lỗ hổng mà chính bản vá "gắn lại grant mồ côi" đã mở ra ─────
+#
+# Vòng soát thứ hai dựng lại được cả hai trên database thật. Cả hai chỉ tồn tại SAU khi
+# `reserve()` biết gắn lại — trước đó nhánh này ném `AlreadyClaimed` nên không đi tới đâu.
+
+
+async def _reserve_gia(factory, *, user_id: int, key: str, value_vnd: int):
+    async with factory() as s, s.begin():
+        return await ci.reserve(
+            s,
+            user_id=user_id,
+            grant_key=key,
+            grant_type="points_redeem",
+            code_type="diemdanh",
+            value_vnd=value_vnd,
+        )
+
+
+async def _mo_coi(factory) -> None:
+    """Dựng đúng trạng thái mồ côi: gửi hỏng ⇒ không mark_delivered ⇒ job dọn kho chạy."""
+    async with factory() as s, s.begin():
+        await s.execute(text("UPDATE codes SET reserved_until = now() - interval '1 minute'"))
+    async with factory() as s, s.begin():
+        await ci.reap_reservations(s)
+
+
+@pytest.mark.asyncio
+async def test_gan_lai_KHONG_duoc_doi_menh_gia_da_vao_so(seeded, session_factory):
+    """Mã trao tay và số tiền vào sổ phải là CÙNG MỘT con số.
+
+    Đường tới đây không cần admin làm gì: khoá đổi điểm là `redeem:{user_id}:{ngày}`, nó
+    **không mang bậc mệnh giá**. Bấm bậc 10K → gửi hỏng → job dọn → cùng ngày bấm bậc
+    50K: `redeem()` thấy đã trừ điểm rồi nên không trừ thêm, còn `reserve()` thì được gọi
+    với 50.000.
+
+    Không ghim mệnh giá thì người dùng cầm mã 50.000đ trong khi sổ cái, bút toán và bộ đếm
+    đều ghi 10.000đ — nhà phát trả 40.000đ mà không bao giờ ghi nhận. Chiều ngược lại thì
+    người dùng bị lấy mất 40.000đ.
+    """
+    db = seeded
+    await make_user(db, 9400)
+    await add_codes(db, code_type="diemdanh", value_vnd=10_000, count=3, prefix="D10")
+    await add_codes(db, code_type="diemdanh", value_vnd=50_000, count=3, prefix="D50")
+
+    dau = await _reserve_gia(session_factory, user_id=9400, key="redeem:9400:x", value_vnd=10_000)
+    assert dau.value_vnd == 10_000
+    await _mo_coi(session_factory)
+
+    # Lượt sau gọi với mệnh giá KHÁC — đúng như bậc thứ hai trong cùng ngày.
+    lai = await _reserve_gia(session_factory, user_id=9400, key="redeem:9400:x", value_vnd=50_000)
+
+    assert lai.value_vnd == 10_000, "mệnh giá trả về đã trôi khỏi con số đã vào sổ"
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text("""
+                SELECT g.value_vnd AS so_ghi, c.value_vnd AS ma_that, c.code_value
+                  FROM code_grants g JOIN codes c USING (code_id)
+                 WHERE g.user_id = 9400
+                """)
+            )
+        ).one()
+    assert row.so_ghi == row.ma_that, (
+        f"sổ ghi {row.so_ghi:,}đ nhưng mã trao tay là {row.ma_that:,}đ ({row.code_value})"
+    )
+    assert row.code_value.startswith("D10"), "phát mã của mệnh giá chưa được trả tiền"
+
+
+@pytest.mark.asyncio
+async def test_gan_lai_bao_dung_rang_grant_da_ton_tai(seeded, session_factory):
+    """`was_existing=False` cho một grant đã tồn tại làm chết hàng rào của `checkin.redeem`.
+
+    Hàng rào đó (`if grant.was_existing and grant.value_vnd != value_vnd`) tồn tại đúng
+    cho tình huống này, và trả `False` khiến nó im lặng ở lượt duy nhất nó có việc.
+    """
+    db = seeded
+    await make_user(db, 9410)
+    await add_codes(db, code_type="diemdanh", value_vnd=10_000, count=3, prefix="D10")
+
+    await _reserve_gia(session_factory, user_id=9410, key="redeem:9410:x", value_vnd=10_000)
+    await _mo_coi(session_factory)
+    lai = await _reserve_gia(session_factory, user_id=9410, key="redeem:9410:x", value_vnd=10_000)
+
+    assert lai.was_existing is True
+
+
+@pytest.mark.asyncio
+async def test_hai_luot_dong_thoi_tren_grant_mo_coi_chi_ra_MOT_ma(seeded, session_factory):
+    """Hai người cầm chung một mã quà — đúng loại lỗi module này sinh ra để chặn.
+
+    `ON CONFLICT DO NOTHING` chỉ chặn được người đến sau khi dòng kia CHƯA commit. Với một
+    grant đã commit từ trước nó trả rỗng mà **không giữ khoá nào**, nên hai lời gọi song
+    song cùng thấy `code_id IS NULL`, cùng giành một mã KHÁC NHAU qua `SKIP LOCKED`, và
+    người sau ghi đè `code_id`. Mã của người trước mồ côi → job dọn trả về kho → phát cho
+    NGƯỜI KHÁC.
+
+    Đường tới đây có thật: `handle_check_groups` (nút thật sự gọi `reserve()`) không có
+    cooldown, và `concurrent_updates(True)` biến một cú bấm đúp thành hai task song song.
+    """
+    db = seeded
+    await make_user(db, 9420)
+    await add_codes(db, code_type="diemdanh", value_vnd=10_000, count=10, prefix="D10")
+
+    await _reserve_gia(session_factory, user_id=9420, key="redeem:9420:x", value_vnd=10_000)
+    await _mo_coi(session_factory)
+
+    # ── Đo BẤT BIẾN, không đo cuộc đua ────────────────────────────────────────────
+    # Hai cách "tự nhiên" hơn đều KHÔNG phân biệt được, đã thử cả hai:
+    #
+    # 1. `asyncio.gather` hai lượt rồi mong chúng chồng nhau — xanh cả khi khoá bị gỡ.
+    #    Đó là bài kiểm xác suất, và ở đây xác suất không đứng về phía nó.
+    # 2. Một giao dịch khác giữ `FOR UPDATE` rồi đòi `reserve()` phải treo — cũng xanh khi
+    #    khoá bị gỡ, vì `INSERT … ON CONFLICT` tự chờ trên dòng đang bị khoá. Nó đo cơ chế
+    #    của Postgres chứ không đo dòng code của mình.
+    #
+    # Nên đo thẳng thứ cần đo: **`reserve()` có PHÁT RA câu khoá dòng grant hay không.**
+    # Trắng hộp, nhưng dứt khoát — gỡ dòng khoá đi là bài này đỏ ngay.
+    cau_lenh: list[str] = []
+
+    def _ghi_lai(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        cau_lenh.append(" ".join(statement.split()).upper())
+
+    # Lấy engine từ CHÍNH factory của bài kiểm — `db.engine` toàn cục không được khởi tạo
+    # trong file này (fixture `engine` của conftest dựng engine riêng cho mỗi test).
+    sync_engine = session_factory.kw["bind"].sync_engine
+    sa_event.listen(sync_engine, "before_cursor_execute", _ghi_lai)
+    try:
+        lai = await _reserve_gia(
+            session_factory, user_id=9420, key="redeem:9420:x", value_vnd=10_000
+        )
+    finally:
+        sa_event.remove(sync_engine, "before_cursor_execute", _ghi_lai)
+
+    assert lai.code_value
+    khoa = [c for c in cau_lenh if "CODE_GRANTS" in c and "FOR UPDATE" in c]
+    assert khoa, (
+        "reserve() không khoá dòng grant trước khi đọc — hai lượt song song sẽ cùng thấy "
+        "code_id IS NULL và cùng giành một mã khác nhau"
+    )
+
+    async with session_factory() as s:
+        giu_cho = (
+            await s.execute(text("SELECT count(*) FROM codes WHERE status = 'reserved'"))
+        ).scalar_one()
+        so_grant = (
+            await s.execute(text("SELECT count(*) FROM code_grants WHERE user_id = 9420"))
+        ).scalar_one()
+    assert giu_cho == 1, "có mã bị giữ chỗ mà không grant nào trỏ tới — nó sẽ bị phát lại"
+    assert so_grant == 1

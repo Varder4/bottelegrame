@@ -113,7 +113,29 @@ async def reserve(
     )
     grant_id = (await db.execute(ins)).scalar_one_or_none()
 
+    re_attached = False
+
     if grant_id is None:
+        # ── KHOÁ DÒNG GRANT TRƯỚC KHI ĐỌC ──────────────────────────────────────────
+        # `ON CONFLICT DO NOTHING` chỉ chặn được người đến sau trong lúc dòng kia CHƯA
+        # commit. Với một grant đã commit từ trước, nó trả về rỗng mà **không giữ khoá
+        # nào** — nên hai lời gọi song song cùng đọc `code_id IS NULL`, cùng giành được
+        # một mã KHÁC NHAU qua `SKIP LOCKED`, và người sau chỉ việc ghi đè `code_id`.
+        # Mã của người trước mồ côi, được job dọn trả về kho, rồi phát cho NGƯỜI KHÁC —
+        # hai người cầm chung một mã quà. Đo được 30/30 lần trên database thật.
+        #
+        # Đường tới đây có thật: `handle_check_groups` (nút gọi `reserve()`) không có
+        # cooldown, và `concurrent_updates(True)` biến một cú bấm đúp thành hai task
+        # chạy song song.
+        #
+        # Khoá bằng một câu SELECT RIÊNG chỉ lấy khoá chính. Không gắn `FOR UPDATE` vào
+        # câu nối bảng bên dưới: Postgres từ chối `FOR UPDATE` trên nhánh nullable của
+        # outer join, còn `of=CodeGrant` thì trả `code_value = None` cho người thua (nó
+        # khoá lại dòng grant nhưng dùng lại bản join đã đọc), và handler sẽ in "Mã: None".
+        await db.execute(
+            select(CodeGrant.grant_id).where(CodeGrant.grant_key == grant_key).with_for_update()
+        )
+
         # Đã tồn tại. Trả lại đúng mã cũ — bấm lại phải cho ra cùng kết quả, không phải lỗi.
         existing = (
             await db.execute(
@@ -152,11 +174,31 @@ async def reserve(
                 # của con người trên một đường tiêu tiền.
                 raise AlreadyClaimed(grant_type, existing_code=None)
             grant_id = existing.grant_id
+            re_attached = True
+
+            # ── GHIM MỆNH GIÁ VỀ ĐÚNG CON SỐ ĐÃ VÀO SỔ ────────────────────────────
+            # `value_vnd` do NƠI GỌI truyền vào, và nó có thể khác con số đã ghi trong
+            # `code_grants` từ lượt trước. Không ghim thì bước 2 chọn mã theo con số MỚI
+            # trong khi sổ cái, bút toán và bộ đếm người dùng vẫn ghi con số CŨ — người
+            # dùng cầm một mã 50.000đ mà sổ ghi 10.000đ, hoặc ngược lại.
+            #
+            # Đường tới đây có thật và không cần admin làm gì: khoá đổi điểm là
+            # `redeem:{user_id}:{ngày}`, KHÔNG mang bậc mệnh giá. Bấm bậc 10K → gửi hỏng
+            # → job dọn → cùng ngày bấm bậc 50K: `redeem()` thấy đã trừ điểm rồi nên
+            # không trừ thêm, còn `reserve()` thì phát mã 50K trên một grant ghi 10K.
+            #
+            # Ghim về `existing.value_vnd` chứ KHÔNG sửa `code_grants.value_vnd` theo yêu
+            # cầu mới: người dùng đã trả điểm cho con số cũ, đổi giá sau lưng họ là một
+            # giao dịch khác hẳn. Hết kho mệnh giá cũ thì ném `OutOfStock` — hỏng theo
+            # hướng an toàn, đúng ý.
+            value_vnd = existing.value_vnd
+
             log.warning(
                 "gan_lai_ma_cho_grant_mo_coi",
                 grant_key=grant_key,
                 grant_id=grant_id,
                 user_id=user_id,
+                value_vnd=value_vnd,
             )
         else:
             return Grant(
@@ -215,7 +257,10 @@ async def reserve(
         code_id=picked.code_id,
         code_value=picked.code_value,
         value_vnd=value_vnd,
-        was_existing=False,
+        # Grant gắn lại là grant ĐÃ TỒN TẠI. Trả `False` ở đây làm chết hàng rào
+        # `if grant.was_existing and grant.value_vnd != value_vnd` của `checkin.redeem()`
+        # — đúng vào lượt duy nhất nó có việc để làm.
+        was_existing=re_attached,
         state="reserved",
     )
 

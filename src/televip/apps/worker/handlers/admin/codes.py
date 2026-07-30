@@ -1088,7 +1088,7 @@ async def resolve_user(db: AsyncSession, raw: str) -> int | None:
     token = raw.strip()
     if token.startswith("@"):
         sql, params = _SQL_FIND_USER_BY_NAME, {"name": token[1:]}
-    elif token.lstrip("-").isdigit():
+    elif token.lstrip("-").isdecimal():
         sql, params = _SQL_FIND_USER_BY_ID, {"uid": int(token)}
     else:
         # Không có `@` mà cũng không phải số: coi là username, admin hay quên dấu `@`.

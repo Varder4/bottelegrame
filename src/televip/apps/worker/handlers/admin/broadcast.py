@@ -459,7 +459,7 @@ async def _resolve_job_id(context: ContextTypes.DEFAULT_TYPE) -> tuple[int | Non
     args = _args(context)
     if args:
         token = args[0].lstrip("#").strip()
-        return (int(token) if token.isdigit() else None), True
+        return (int(token) if token.isdecimal() else None), True
     async with session() as db:
         return await broadcast_service.latest_job_id(db), False
 

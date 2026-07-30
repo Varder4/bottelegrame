@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     def _token_shape(cls, v: str) -> str:
         # Định dạng Telegram: "<bot_id>:<chuỗi>". Bắt lỗi dán nhầm ngay lúc khởi động
         # thay vì để nó nổ ở lời gọi API đầu tiên.
-        if ":" not in v or not v.split(":", 1)[0].isdigit():
+        if ":" not in v or not v.split(":", 1)[0].isdecimal():
             raise ValueError("BOT_TOKEN sai định dạng, phải là '<bot_id>:<chuỗi>'")
         return v
 

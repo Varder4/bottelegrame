@@ -213,7 +213,8 @@ def _parse_user_id(raw: str) -> int | None:
     cleaned = raw.strip()
     if cleaned.startswith("-"):
         return None
-    return int(cleaned) if cleaned.isdigit() else None
+    # `isdecimal` — xem `services/users.py`. `int("²")` ném dù `isdigit()` nói True.
+    return int(cleaned) if cleaned.isdecimal() else None
 
 
 def _vn_time(moment: datetime | None) -> str:

@@ -288,7 +288,7 @@ def parse_redeem_value(data: str | None) -> int | None:
     if not data or not data.startswith(keyboards.CB_REDEEM_PREFIX):
         return None
     raw = data.removeprefix(keyboards.CB_REDEEM_PREFIX)
-    return int(raw) if raw.isdigit() else None
+    return int(raw) if raw.isdecimal() else None
 
 
 async def _pass_cooldown(
