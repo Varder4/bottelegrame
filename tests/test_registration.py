@@ -253,9 +253,6 @@ CHUA_XAY: frozenset[str] = frozenset(
         "/baocao",  # cần lớp báo cáo tổng hợp
         "/checkip",  # cần lớp chống gian lận (GĐ4B): signal_owners, risk_assessments
         "/chiendich",
-        "/done_event",
-        "/show_share_event",
-        "/update_share_event",
     }
 )
 
