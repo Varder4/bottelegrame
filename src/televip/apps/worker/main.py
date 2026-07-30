@@ -22,6 +22,8 @@ from telegram.ext import (
     filters,
 )
 
+from televip.apps.worker.handlers.admin import codes as admin_codes
+from televip.apps.worker.handlers.admin import ops as admin_ops
 from televip.apps.worker.handlers.start import handle_start
 from televip.apps.worker.handlers.tanthu import handle_check_groups, handle_tanthu
 from televip.cache.client import close_redis, init_redis
@@ -33,6 +35,31 @@ from televip.telegram import keyboards
 from televip.telegram.sender import Sender
 
 log = get_logger(__name__)
+
+#: Lệnh admin → handler. Mỗi handler đã mang `@admin_command(...)`, nên đăng ký ở đây
+#: KHÔNG cấp quyền cho ai: người không có quyền vẫn gõ được lệnh và vẫn bị chặn ở
+#: decorator. Danh sách này chỉ nói "lệnh này có người xử lý".
+#:
+#: Cố ý là một bảng dữ liệu chứ không phải 14 dòng `app.add_handler`: thêm một lệnh admin
+#: là thêm một dòng, và không có cách nào thêm nhầm nó vào SAU lưới an toàn callback.
+ADMIN_COMMANDS: list[tuple[str, object]] = [
+    # Kho code (§13.4.2)
+    ("add_giffcode", admin_codes.handle_add_giffcode),
+    ("del_code", admin_codes.handle_del_code),
+    ("resend_tanthu", admin_codes.handle_resend_tanthu),
+    ("codes", admin_codes.handle_codes),
+    ("tonkho", admin_codes.handle_tonkho),
+    # Vận hành và cấu hình nóng (§13.4.2 mục 5, 14 và §13.4.3)
+    ("cauhinh", admin_ops.cmd_cauhinh),
+    ("setcauhinh", admin_ops.cmd_setcauhinh),
+    ("stats", admin_ops.cmd_stats),
+    ("user", admin_ops.cmd_user),
+    ("ban", admin_ops.cmd_ban),
+    ("unban", admin_ops.cmd_unban),
+    ("admin_add", admin_ops.cmd_admin_add),
+    ("admin_del", admin_ops.cmd_admin_del),
+    ("help_admin", admin_ops.cmd_help_admin),
+]
 
 #: Menu lệnh cho người dùng thường (13-dac-ta §13.3.2). Lệnh admin KHÔNG nằm ở đây —
 #: chúng chỉ hiện với từng admin qua `BotCommandScopeChat`.
@@ -70,6 +97,9 @@ def build_application() -> Application:
     app.bot_data["sender"] = Sender(app.bot)
 
     app.add_handler(CommandHandler("start", handle_start))
+
+    for name, handler in ADMIN_COMMANDS:
+        app.add_handler(CommandHandler(name, handler))
 
     # `filters.Text([...])` so khớp BẰNG NHAU TUYỆT ĐỐI với nhãn nút. Bot cũ dùng
     # `"Game" in text` nên mọi tin nhắn chứa chữ đó rơi nhầm handler (`keyboards.py`).
