@@ -53,5 +53,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S", "T20"]
+# `scripts/*` là công cụ dòng lệnh chạy tay: `print` CHÍNH LÀ giao diện của chúng, và
+# `subprocess` là cách chúng gọi alembic. Bắt hai luật này ở đây chỉ đẻ ra `# noqa` rải rác.
+"scripts/*" = ["T20", "S603", "S607"]
 # Chỉ tầng telegram/sender.py được phép gọi Bot API trực tiếp — kiểm bằng script riêng,
 # ruff không diễn đạt được luật này nên xem scripts/check_architecture.py
