@@ -16,7 +16,7 @@
    Chỉ hiện với người có quyền `/tonkho`, và chỉ khi thật sự có mệnh giá dưới ngưỡng.
    Một dải cảnh báo luôn hiện là một dải không ai đọc. #}
 {% if canh_bao_kho and canh_bao_kho.low_count %}
-<a href="/kho" class="flex items-center gap-3 mb-6 p-4 rounded-lg bg-amber-50
+<a href="/kho" class="flex items-center gap-3 mb-6 p-4 rounded-xl bg-amber-50
                       border border-amber-200 hover:bg-amber-100 transition-colors">
   <span class="text-amber-500 shrink-0">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
   <span class="text-sm text-amber-900">
@@ -31,7 +31,7 @@
 {# ── Số liệu hệ thống ────────────────────────────────────────────── #}
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
-  <div class="bg-white rounded-lg shadow p-6">
+  <div class="bg-white rounded-xl shadow p-6">
     <div class="flex items-center justify-between">
       <div>
         <p class="text-sm font-medium text-gray-600">Người dùng</p>
@@ -46,7 +46,7 @@
     </div>
   </div>
 
-  <div class="bg-white rounded-lg shadow p-6">
+  <div class="bg-white rounded-xl shadow p-6">
     <div class="flex items-center justify-between">
       <div>
         <p class="text-sm font-medium text-gray-600">Code khả dụng</p>
@@ -63,7 +63,7 @@
     </div>
   </div>
 
-  <div class="bg-white rounded-lg shadow p-6">
+  <div class="bg-white rounded-xl shadow p-6">
     <div class="flex items-center justify-between">
       <div>
         <p class="text-sm font-medium text-gray-600">Code đã phát</p>
@@ -78,7 +78,7 @@
     </div>
   </div>
 
-  <div class="bg-white rounded-lg shadow p-6">
+  <div class="bg-white rounded-xl shadow p-6">
     <div class="flex items-center justify-between">
       <div>
         <p class="text-sm font-medium text-gray-600">Đã phát ra</p>
@@ -105,7 +105,7 @@
 {% endif %}
 
 {# ── Danh sách quyền ─────────────────────────────────────────────── #}
-<div class="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
+<div class="mt-6 bg-white rounded-xl shadow-sm border border-gray-200">
   <div class="p-4 border-b border-gray-200 flex items-center justify-between">
     <h2 class="font-medium text-gray-900">Màn hình bạn được dùng</h2>
     <span class="text-sm text-gray-500">{{ so_muc }} / {{ menu|length }}</span>

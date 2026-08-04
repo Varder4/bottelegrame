@@ -35,7 +35,6 @@ from datetime import datetime
 from typing import Any, Final
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -46,8 +45,13 @@ from televip.core.logging import get_logger
 from televip.db.engine import session, transaction
 from televip.domain import texts
 from televip.services import admin as admin_service
-from televip.services import settings_service, text_service
+from televip.services import code_issuance, settings_service, text_service
 from televip.services import stats as stats_service
+from televip.services import users as users_service
+
+# `resolve_user` nhập lại dưới tên cũ: hai handler khác (`identity.py`, `share_event.py`)
+# đang nhập nó TỪ FILE NÀY. Đổi đường nhập của chúng là việc riêng, không lẫn vào đây.
+from televip.services.users import resolve_user
 
 log = get_logger(__name__)
 
@@ -520,57 +524,11 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ── /user ───────────────────────────────────────────────────────────
 
-_SQL_USER_BY_ID = """
-SELECT u.user_id, u.username, u.full_name, u.joined_at, u.verified_at,
-       u.points_balance, u.checkin_streak, u.risk_score,
-       b.reason AS ban_reason, b.banned_at, b.unbanned_at,
-       (SELECT count(*) FROM referrals r WHERE r.referrer_id = u.user_id)      AS refs_total,
-       (SELECT count(*) FROM referrals r
-         WHERE r.referrer_id = u.user_id AND r.qualified_at IS NOT NULL)       AS refs_qualified,
-       (SELECT coalesce(sum(g.value_vnd), 0)::bigint FROM code_grants g
-         WHERE g.user_id = u.user_id AND g.state = 'delivered')                AS value_total,
-       (SELECT count(*) FROM code_grants g WHERE g.user_id = u.user_id)        AS grants_total
-  FROM users u
-  LEFT JOIN user_bans b ON b.user_id = u.user_id
- WHERE u.user_id = :uid
-"""
-
-_SQL_USER_BY_USERNAME = "SELECT user_id FROM users WHERE lower(username) = lower(:un)"
-
-_SQL_USER_BY_PK = "SELECT user_id FROM users WHERE user_id = :uid"
-
-_SQL_USER_GRANTS = """
-SELECT g.grant_type, g.value_vnd, g.state, g.created_at, c.code_value
-  FROM code_grants g
-  LEFT JOIN codes c ON c.code_id = g.code_id
- WHERE g.user_id = :uid
- ORDER BY g.created_at DESC
- LIMIT :lim
-"""
-
 _GRANT_STATE_VI: Final[dict[str, str]] = {
     "reserved": "đang giữ chỗ",
     "delivered": "đã giao",
     "revoked": "đã thu hồi",
 }
-
-
-async def resolve_user(db: AsyncSession, token: str) -> int | None:
-    """`@username` hoặc `user_id` → `user_id`. None khi không tìm thấy.
-
-    Tra username bằng `lower()` để khớp index `uq_users_username_lower`: username của
-    Telegram không phân biệt hoa thường, và CSKH gõ lại tên theo trí nhớ.
-    """
-    cleaned = token.strip()
-    if cleaned.startswith("@"):
-        params = {"un": cleaned[1:]}
-        return (await db.execute(text(_SQL_USER_BY_USERNAME), params)).scalar_one_or_none()
-
-    parsed = _parse_user_id(cleaned)
-    if parsed is None:
-        return None
-    result = await db.execute(text(_SQL_USER_BY_PK), {"uid": parsed})
-    return result.scalar_one_or_none()
 
 
 @admin_command("/user")
@@ -591,15 +549,18 @@ async def cmd_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if user_id is None:
             await _reply(update, context, f"❌ Không tìm thấy người dùng `{token}`.")
             return
-        profile = (await db.execute(text(_SQL_USER_BY_ID), {"uid": user_id})).one()
-        grants = (
-            await db.execute(text(_SQL_USER_GRANTS), {"uid": user_id, "lim": USER_GRANT_LIMIT})
-        ).all()
+        profile = await users_service.admin_profile(db, user_id)
+        grants = await code_issuance.grants_of_user(db, user_id, limit=USER_GRANT_LIMIT)
 
-    banned = profile.banned_at is not None and profile.unbanned_at is None
-    if banned:
+    if profile is None:
+        # `resolve_user` vừa xác nhận id này ngay trên, nên tới đây chỉ có thể là hàng vừa
+        # bị xoá giữa hai câu. Trả lời như không tìm thấy thay vì để `None` chọc xuống dưới.
+        await _reply(update, context, f"❌ Không tìm thấy người dùng `{token}`.")
+        return
+
+    if profile.dang_khoa:
         ban_line = f"🚫 ĐANG BỊ KHOÁ từ {_vn_time(profile.banned_at)} — {profile.ban_reason}"
-    elif profile.banned_at is not None:
+    elif profile.da_tung_khoa:
         ban_line = f"✅ Không bị khoá (đã gỡ lúc {_vn_time(profile.unbanned_at)})"
     else:
         ban_line = "✅ Không bị khoá"
@@ -880,22 +841,6 @@ async def cmd_admin_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 USERS_DEFAULT: Final = 30
 USERS_MAX: Final = 100
 
-_SQL_USERS_RECENT = """
-SELECT u.user_id, u.username, u.full_name, u.joined_at, u.verified_at,
-       (b.user_id IS NOT NULL) AS dang_khoa
-  FROM users u
-  LEFT JOIN user_bans b ON b.user_id = u.user_id AND b.unbanned_at IS NULL
- ORDER BY u.joined_at DESC
- LIMIT :lim
-"""
-
-_SQL_USERS_TOTAL = """
-SELECT count(*)                                              AS tong,
-       count(*) FILTER (WHERE verified_at IS NOT NULL)       AS da_xac_minh,
-       count(*) FILTER (WHERE joined_at >= now() - interval '24 hours') AS moi_24h
-  FROM users
-"""
-
 
 @admin_command("/users", mutates=False)
 async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -920,8 +865,8 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         limit = min(int(args[0]), USERS_MAX)
 
     async with session() as db:
-        tong = (await db.execute(text(_SQL_USERS_TOTAL))).one()
-        rows = (await db.execute(text(_SQL_USERS_RECENT), {"lim": limit})).all()
+        tong = await users_service.user_totals(db)
+        rows = await users_service.recent_users(db, limit=limit)
 
     lines = [
         f"{'🚫' if row.dang_khoa else ('✅' if row.verified_at is not None else '⬜')} "

@@ -15,85 +15,24 @@ Bốn mệnh đề trọng tâm:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 
 from televip.db.engine import session as db_session
 from televip.services import admin_auth
-from tests.conftest import (
-    TEST_DATABASE_URL,
-    TEST_REDIS_URL,
-    _truncate_all,
-    add_codes,
-    make_user,
-)
+from tests.conftest import add_codes, make_user
 
 OWNER_ID = 990_001
 CSKH_ID = 990_002
 TEN = "chubot"
 MAT_KHAU = "matkhaudaimuoiky"
-UA = "Mozilla/5.0 (Windows NT 10.0) TestClient/1.0"
 
-#: Mọi lệnh của khối kho — dùng để dựng quyền cho `owner`.
-_LENH = ("/stats", "/tonkho", "/add_giffcode", "/codes", "/user")
-
-
-@pytest_asyncio.fixture
-async def app_client() -> AsyncIterator[httpx.AsyncClient]:
-    """App thật, database test thật, Redis test thật — không giả lập gì.
-
-    ## Cách trỏ app sang database test, và vì sao KHÔNG vá `get_settings`
-
-    Bản đầu tiên của fixture này vá `televip.core.config.get_settings`. Nó **không có tác
-    dụng**: `apps/adminweb/app.py` viết `from televip.core.config import get_settings`, nên
-    tên đó đã được nối cứng vào module app từ lúc import — vá thuộc tính của module cấu
-    hình không đổi được cái tên đã nối.
-
-    Hậu quả thật: `create_app()` dựng engine trỏ vào database **dev**, rồi `_truncate_all()`
-    xoá sạch nó — mất 220 mã code, 52 khoá cấu hình, nhóm bắt buộc và tài khoản admin.
-
-    Cách đúng là **tự dựng engine và Redis trước**, rồi để `init_engine()` / `init_redis()`
-    bên trong `create_app()` trả về sớm (chúng thoát ngay khi đã được khởi tạo). Ở đây ta
-    dùng hành vi "trả về sớm" đó một cách CÓ CHỦ Ý, thay vì vấp phải nó.
-    """
-
-    from televip.apps.adminweb.app import create_app
-    from televip.cache.client import close_redis, get_redis, init_redis
-    from televip.db import engine as db_engine
-
-    # Dọn sạch trạng thái toàn cục do test trước để lại, rồi tự dựng đúng đích ta muốn.
-    await db_engine.dispose_engine()
-    await close_redis()
-
-    db_engine.init_engine(
-        SimpleNamespace(database_url=TEST_DATABASE_URL, db_pool_size=15)  # type: ignore[arg-type]
-    )
-    init_redis(SimpleNamespace(redis_url=TEST_REDIS_URL))  # type: ignore[arg-type]
-
-    try:
-        # `create_app()` gọi lại `init_engine`/`init_redis`; cả hai thấy đã khởi tạo và
-        # trả về ngay, nên app dùng đúng hai thứ ta vừa dựng ở trên.
-        app = create_app()
-
-        async with db_session() as s:
-            await _truncate_all(s)  # tự kiểm `current_database()` — xem conftest
-            await s.commit()
-        await get_redis().flushdb()
-
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver", headers={"user-agent": UA}
-        ) as client:
-            yield client
-    finally:
-        await db_engine.dispose_engine()
-        await close_redis()
+#: Quyền dựng cho `owner` trong các bài dưới đây. KHÔNG phải toàn bộ 33 lệnh — cố ý thiếu
+#: `/broadcast`, để còn kiểm được rằng mục menu tương ứng KHÔNG hiện.
+_LENH = ("/stats", "/tonkho", "/add_giffcode", "/codes", "/user", "/users")
 
 
 async def run_sql(sql: str, params: dict[str, Any] | None = None) -> None:
@@ -372,7 +311,7 @@ async def test_menu_chi_hien_muc_nguoi_do_co_quyen(app_client: httpx.AsyncClient
     """
     from televip.services import admin as admin_service
 
-    # `cskh` chỉ có `/stats` và `/user`, KHÔNG có `/tonkho`.
+    # `cskh` thật (migration 0003) có `/stats`, `/user`, `/users` — và KHÔNG có `/tonkho`.
     async with db_session() as s:
         await make_user(s, CSKH_ID)
         await s.commit()
@@ -380,7 +319,7 @@ async def test_menu_chi_hien_muc_nguoi_do_co_quyen(app_client: httpx.AsyncClient
         "INSERT INTO admin_users (user_id, role, added_by) VALUES (:u, 'cskh', :u)",
         {"u": CSKH_ID},
     )
-    for lenh in ("/stats", "/user"):
+    for lenh in ("/stats", "/user", "/users"):
         await run_sql(
             "INSERT INTO admin_permissions (role, command) VALUES ('cskh', :c) "
             "ON CONFLICT DO NOTHING",
@@ -497,7 +436,7 @@ async def test_cskh_bi_tu_choi_man_kho_du_da_dang_nhap(app_client: httpx.AsyncCl
         "INSERT INTO admin_users (user_id, role, added_by) VALUES (:u, 'cskh', :u)",
         {"u": CSKH_ID},
     )
-    for lenh in ("/stats", "/user"):
+    for lenh in ("/stats", "/user", "/users"):
         await run_sql(
             "INSERT INTO admin_permissions (role, command) VALUES ('cskh', :c) "
             "ON CONFLICT DO NOTHING",

@@ -76,7 +76,7 @@ async def ip_cua(request: Request) -> str | None:
     return client_ip(request, await _trusted_proxies())
 
 
-def _khong_thay() -> HTTPException:
+def khong_thay() -> HTTPException:
     """404 chứ không 401.
 
     Trang trả 401 là trang tự khai "ở đây có thứ đáng đăng nhập". Máy quét tự động không
@@ -95,7 +95,7 @@ async def phien_hien_tai(request: Request) -> NguoiDung:
     ten_cookie = security.cookie_name(secure=request.app.state.secure_cookies)
     gia_tri = request.cookies.get(ten_cookie)
     if not gia_tri:
-        raise _khong_thay()
+        raise khong_thay()
 
     async with session() as db:
         phien = await admin_auth.load_session(
@@ -103,7 +103,7 @@ async def phien_hien_tai(request: Request) -> NguoiDung:
         )
         await db.commit()
         if phien is None:
-            raise _khong_thay()
+            raise khong_thay()
         role = await admin_service.get_role(db, phien.user_id)
 
     if role is None:
@@ -113,7 +113,7 @@ async def phien_hien_tai(request: Request) -> NguoiDung:
             await admin_auth.revoke_all_sessions(db, user_id=phien.user_id)
             await db.commit()
         log.warning("adminweb_phien_cua_nguoi_het_quyen", user_id=phien.user_id)
-        raise _khong_thay()
+        raise khong_thay()
 
     return NguoiDung(user_id=phien.user_id, role=role, csrf_token=phien.csrf_token)
 
@@ -130,7 +130,7 @@ def can_quyen(lenh: str) -> Callable[..., Awaitable[NguoiDung]]:
             duoc = await admin_service.can_run(db, nguoi.user_id, lenh)
         if not duoc:
             log.warning("adminweb_tu_choi_quyen", user_id=nguoi.user_id, role=nguoi.role, lenh=lenh)
-            raise _khong_thay()
+            raise khong_thay()
         return nguoi
 
     return _gac
@@ -151,7 +151,7 @@ async def kiem_csrf(
 
     if not check_csrf(request.headers.get("x-tv-csrf"), nguoi.csrf_token):
         log.warning("adminweb_csrf_truot", user_id=nguoi.user_id, duong_dan=request.url.path)
-        raise _khong_thay()
+        raise khong_thay()
 
     origin = request.headers.get("origin")
     if not origin or origin.rstrip("/") != str(request.base_url).rstrip("/"):
@@ -161,7 +161,7 @@ async def kiem_csrf(
             origin=origin,
             mong_doi=str(request.base_url),
         )
-        raise _khong_thay()
+        raise khong_thay()
     return nguoi
 
 
@@ -169,6 +169,7 @@ __all__ = [
     "SETTING_TRUSTED_PROXIES",
     "NguoiDung",
     "can_quyen",
+    "khong_thay",
     "client_ip",
     "ip_cua",
     "kiem_csrf",

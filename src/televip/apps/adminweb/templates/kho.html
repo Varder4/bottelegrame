@@ -13,7 +13,7 @@
     </p>
   </div>
   {% if tong.low_count %}
-  <div class="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-50 border border-amber-200
+  <div class="flex items-center gap-2 px-4 py-2 rounded-full bg-amber-50 border border-amber-200
               text-amber-800 text-sm">
     <span class="text-amber-500">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
     {{ tong.low_count }} mệnh giá dưới ngưỡng — cần nạp thêm
@@ -24,19 +24,19 @@
 {# ── Bốn con số tổng ─────────────────────────────────────────────────
    Cộng bởi `stock.summarize()`, cùng hàm mà `/tonkho` của bot dùng ở chân tin nhắn. #}
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-  <div class="bg-white rounded-lg shadow p-5">
+  <div class="bg-white rounded-xl shadow p-5">
     <p class="text-sm font-medium text-gray-600">Còn lại</p>
     <p class="mt-1 text-2xl font-bold text-gray-900">{{ tong.available|vnd }}</p>
   </div>
-  <div class="bg-white rounded-lg shadow p-5">
+  <div class="bg-white rounded-xl shadow p-5">
     <p class="text-sm font-medium text-gray-600">Giá trị tồn</p>
     <p class="mt-1 text-2xl font-bold text-primary-600">{{ tong.value_vnd|vnd }}đ</p>
   </div>
-  <div class="bg-white rounded-lg shadow p-5">
+  <div class="bg-white rounded-xl shadow p-5">
     <p class="text-sm font-medium text-gray-600">Đã phát</p>
     <p class="mt-1 text-2xl font-bold text-gray-900">{{ tong.issued|vnd }}</p>
   </div>
-  <div class="bg-white rounded-lg shadow p-5">
+  <div class="bg-white rounded-xl shadow p-5">
     <p class="text-sm font-medium text-gray-600">Đang giữ chỗ</p>
     <p class="mt-1 text-2xl font-bold text-gray-900">{{ tong.reserved|vnd }}</p>
     <p class="mt-1 text-xs text-gray-400">mã đã bấm nhận, chưa gửi xong</p>
@@ -44,18 +44,18 @@
 </div>
 
 {% if not nhom %}
-<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-10 text-center">
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-10 text-center">
   <div class="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-full
               text-gray-400 mb-4">{{ ic.icon('kho', 'w-7 h-7') }}</div>
   <p class="font-medium text-gray-900">Kho trống</p>
   <p class="mt-1 text-sm text-gray-500">Chưa nạp mã nào. Nạp bằng lệnh
-    <code class="px-1.5 py-0.5 bg-gray-100 rounded text-gray-700">/add_giffcode</code>
+    <code class="px-1.5 py-0.5 bg-gray-100 rounded-md font-mono text-gray-700">/add_giffcode</code>
     trong bot.</p>
 </div>
 {% endif %}
 
 {% for g in nhom %}
-<div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6 overflow-hidden">
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-hidden">
   <div class="p-4 border-b border-gray-200 flex items-center gap-2.5">
     <span class="text-primary-600">{{ ic.icon('kho', 'w-5 h-5') }}</span>
     <h2 class="font-medium text-gray-900">{{ g.nhan }}</h2>

@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Người dùng{% endblock %}
+
+{% block than %}
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold text-gray-900">Người dùng</h1>
+  <p class="mt-2 text-gray-600">{{ so_dong }} người vào bot gần nhất. Tra một người cụ thể
+    bằng ô bên dưới.</p>
+</div>
+
+{# ── Ô tra cứu ───────────────────────────────────────────────────────
+   GET, không POST: tra cứu không đổi gì trong database nên nó không cần CSRF, và đường
+   dẫn kết quả chia sẻ được cho đồng nghiệp. #}
+<form method="get" action="/nguoidung" class="mb-6 flex flex-wrap gap-3">
+  <div class="flex-1 min-w-[240px]">
+    <label for="tim" class="sr-only">Tra cứu người dùng</label>
+    <input id="tim" name="tim" type="text" value="{{ tim }}" maxlength="100"
+           autocomplete="off" autocapitalize="none" spellcheck="false"
+           placeholder="@username hoặc user_id"
+           class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm transition
+                  focus:outline-none focus:ring-2 focus:ring-primary-500
+                  focus:border-transparent">
+  </div>
+  <button type="submit"
+          class="inline-flex items-center gap-2 rounded-lg font-medium transition-colors
+                 px-5 py-2 bg-primary-600 text-white hover:bg-primary-700
+                 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">
+    {{ ic.icon('nguoidung', 'w-4 h-4') }} Tra cứu
+  </button>
+  {% if tim %}
+  <a href="/nguoidung"
+     class="inline-flex items-center rounded-lg px-4 py-2 text-gray-600
+            hover:bg-gray-100 transition-colors">Xoá</a>
+  {% endif %}
+</form>
+
+{% if khong_thay %}
+{# Không rời trang danh sách: người tra hụt vẫn còn chỗ để đi tiếp. #}
+<div role="alert" class="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-200">
+  <div class="flex items-start gap-3">
+    <span class="text-amber-500 shrink-0 mt-0.5">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+    <div class="text-sm">
+      <p class="text-amber-900">Không tìm thấy người dùng
+        <span class="font-medium">“<bdi>{{ tim }}</bdi>”</span>.</p>
+      <p class="mt-1 text-amber-700">Thử <code class="px-1.5 py-0.5 bg-amber-100 rounded-md
+        font-mono">@username</code> hoặc <code class="px-1.5 py-0.5 bg-amber-100 rounded-md
+        font-mono">user_id</code>.</p>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ── Ba con số tổng ─────────────────────────────────────────────── #}
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Tổng người dùng</p>
+    <p class="mt-1 text-2xl font-bold text-gray-900">{{ tong.tong|vnd }}</p>
+  </div>
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Đã xác minh</p>
+    <p class="mt-1 text-2xl font-bold text-green-600">{{ tong.da_xac_minh|vnd }}</p>
+  </div>
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Vào trong 24h</p>
+    <p class="mt-1 text-2xl font-bold text-primary-600">{{ tong.moi_24h|vnd }}</p>
+  </div>
+</div>
+
+{% if not dong %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-10 text-center">
+  <div class="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-full
+              text-gray-400 mb-4">{{ ic.icon('nguoidung', 'w-7 h-7') }}</div>
+  <p class="font-medium text-gray-900">Chưa có người dùng nào</p>
+  <p class="mt-1 text-sm text-gray-500">Bảng này sẽ có dòng ngay khi ai đó bấm
+    <code class="px-1.5 py-0.5 bg-gray-100 rounded-md font-mono">/start</code>.</p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3">Người dùng</th>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">ID</th>
+          <th class="text-left font-medium px-4 py-3">Trạng thái</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Vào bot</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for d in dong %}
+        {# `<bdi>` cách ly hướng đọc: một ký tự U+202E trong full_name đảo ngược thị giác
+           cả dòng và làm ID hiện ra ở chỗ của tên. Autoescape KHÔNG chặn cái đó — nó
+           không phải HTML. #}
+        <tr class="hover:bg-gray-50 transition-colors">
+          <td class="px-4 py-3 max-w-xs">
+            <a href="/nguoidung/{{ d.user_id }}"
+               class="block truncate text-primary-600 hover:underline font-medium"
+               title="{{ ten_hien(d.username, d.full_name) }}">
+              <bdi>{{ ten_hien(d.username, d.full_name) }}</bdi>
+            </a>
+          </td>
+          <td class="px-4 py-3 font-mono text-gray-600 whitespace-nowrap">{{ d.user_id }}</td>
+          <td class="px-4 py-3">
+            {# THỨ TỰ BẮT BUỘC: khoá thắng xác minh. Người vừa xác minh vừa bị khoá phải
+               hiện "Đang bị khoá" — đúng thứ tự của bot. #}
+            {% if d.dang_khoa %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-red-100 text-red-700">Đang bị khoá</span>
+            {% elif d.verified_at %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-green-100 text-green-700">Đã xác minh</span>
+            {% else %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-gray-100 text-gray-600">Chưa xác minh</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 text-right text-gray-500 whitespace-nowrap">
+            {{ d.joined_at|giovn }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="mt-4 text-xs leading-relaxed text-gray-400">
+  Danh sách cố định {{ so_dong }} dòng mới nhất, sắp theo lúc vào bot — không phải theo lần
+  hoạt động cuối, vì câu hỏi ở đây là “ai vừa vào”. Chưa có phân trang: đường tới người thứ
+  {{ so_dong + 1 }} trở đi là ô tra cứu ở trên.
+</p>
+{% endif %}
+
+{% endblock %}

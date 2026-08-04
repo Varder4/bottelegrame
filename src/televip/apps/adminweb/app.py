@@ -65,6 +65,12 @@ def _gio_vn(moment: datetime | None) -> str:
 
 templates.env.filters["giovn"] = _gio_vn
 
+#: Tên hiển thị — CHÍNH hàm mà bot dùng, để web và tin nhắn Telegram gọi một người
+#: bằng cùng một cái tên. Là global chứ không phải filter vì nó nhận hai tham số.
+#: Giá trị trả về là văn bản THÔ của người dùng (hàm này viết cho Telegram, không
+#: escape gì) — template phải bọc nó trong <bdi> và để autoescape lo phần HTML.
+templates.env.globals["ten_hien"] = texts.display_name
+
 
 @asynccontextmanager
 async def _vong_doi(app: FastAPI) -> AsyncIterator[None]:
@@ -104,11 +110,12 @@ def create_app() -> FastAPI:
 
     app.add_middleware(SecurityHeaders, secure=app.state.secure_cookies)
 
-    from televip.apps.adminweb.routes import auth, dashboard, kho
+    from televip.apps.adminweb.routes import auth, dashboard, kho, nguoidung
 
     app.include_router(auth.router)
     app.include_router(dashboard.router)
     app.include_router(kho.router)
+    app.include_router(nguoidung.router)
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

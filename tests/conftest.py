@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 
+import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
@@ -185,3 +187,70 @@ async def redis_clean():
     await client.flushdb()
     yield client
     await close_redis()
+
+
+#: User-Agent cố định của client test. Phiên gắn với UA (đổi UA là giết phiên), nên nó
+#: phải là MỘT hằng dùng chung — hai chuỗi UA khác nhau giữa fixture và test là một bài
+#: kiểm 404 không ai giải thích được.
+UA = "Mozilla/5.0 (Windows NT 10.0) TestClient/1.0"
+
+
+# ── Panel quản trị web ──────────────────────────────────────────────
+#
+# Fixture nằm ở đây chứ không trong một tệp test: HAI module test dùng nó
+# (`test_adminweb.py` và `test_adminweb_nguoidung.py`), và nhập một fixture từ module
+# test này sang module test kia là cách khiến pytest và ruff cãi nhau — ruff thấy tham
+# số cùng tên là một lần định nghĩa lại, còn pytest thì cần đúng cái tên đó.
+
+
+@pytest_asyncio.fixture
+async def app_client() -> AsyncIterator[httpx.AsyncClient]:
+    """App thật, database test thật, Redis test thật — không giả lập gì.
+
+    ## Cách trỏ app sang database test, và vì sao KHÔNG vá `get_settings`
+
+    Bản đầu tiên của fixture này vá `televip.core.config.get_settings`. Nó **không có tác
+    dụng**: `apps/adminweb/app.py` viết `from televip.core.config import get_settings`, nên
+    tên đó đã được nối cứng vào module app từ lúc import — vá thuộc tính của module cấu
+    hình không đổi được cái tên đã nối.
+
+    Hậu quả thật: `create_app()` dựng engine trỏ vào database **dev**, rồi `_truncate_all()`
+    xoá sạch nó — mất 220 mã code, 52 khoá cấu hình, nhóm bắt buộc và tài khoản admin.
+
+    Cách đúng là **tự dựng engine và Redis trước**, rồi để `init_engine()` / `init_redis()`
+    bên trong `create_app()` trả về sớm (chúng thoát ngay khi đã được khởi tạo). Ở đây ta
+    dùng hành vi "trả về sớm" đó một cách CÓ CHỦ Ý, thay vì vấp phải nó.
+    """
+
+    from televip.apps.adminweb.app import create_app
+    from televip.cache.client import close_redis, get_redis, init_redis
+    from televip.db import engine as db_engine
+    from televip.db.engine import session as db_session
+
+    # Dọn sạch trạng thái toàn cục do test trước để lại, rồi tự dựng đúng đích ta muốn.
+    await db_engine.dispose_engine()
+    await close_redis()
+
+    db_engine.init_engine(
+        SimpleNamespace(database_url=TEST_DATABASE_URL, db_pool_size=15)  # type: ignore[arg-type]
+    )
+    init_redis(SimpleNamespace(redis_url=TEST_REDIS_URL))  # type: ignore[arg-type]
+
+    try:
+        # `create_app()` gọi lại `init_engine`/`init_redis`; cả hai thấy đã khởi tạo và
+        # trả về ngay, nên app dùng đúng hai thứ ta vừa dựng ở trên.
+        app = create_app()
+
+        async with db_session() as s:
+            await _truncate_all(s)  # tự kiểm `current_database()` — xem trên
+            await s.commit()
+        await get_redis().flushdb()
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver", headers={"user-agent": UA}
+        ) as client:
+            yield client
+    finally:
+        await db_engine.dispose_engine()
+        await close_redis()

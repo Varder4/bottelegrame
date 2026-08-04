@@ -37,7 +37,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, text, update
@@ -473,10 +473,59 @@ async def revoke_bulk(db: AsyncSession, *, code_type: str, value_vnd: int = 0) -
     return list(rows.all())
 
 
+# ── Sổ phát của MỘT người ───────────────────────────────────────────
+
+_SQL_GRANTS_OF_USER = """
+SELECT g.grant_type, g.value_vnd, g.state, g.created_at, c.code_value
+  FROM code_grants g
+  LEFT JOIN codes c ON c.code_id = g.code_id
+ WHERE g.user_id = :uid
+ ORDER BY g.created_at DESC
+ LIMIT :lim
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class GrantRow:
+    """Một dòng trong sổ phát của một người.
+
+    `code_value` là `None` khi grant đang ở trạng thái `reserved` mà chưa gắn được mã —
+    trạng thái có thật, không phải lỗi dữ liệu.
+    """
+
+    grant_type: str
+    value_vnd: int
+    state: str
+    created_at: datetime
+    code_value: str | None
+
+
+async def grants_of_user(db: AsyncSession, user_id: int, *, limit: int) -> list[GrantRow]:
+    """`limit` lần phát gần nhất của một người, mới nhất trước.
+
+    Đặt ở đây chứ không ở `services/users.py`: câu này đọc `code_grants` LEFT JOIN `codes`
+    — hai bảng TIỀN do module này làm chủ. Để nó ở module người dùng thì lần sau ai sửa
+    quy tắc phát mã sẽ không tìm thấy nó.
+    """
+    rows = (await db.execute(text(_SQL_GRANTS_OF_USER), {"uid": user_id, "lim": limit})).all()
+    return [
+        GrantRow(
+            grant_type=r.grant_type,
+            value_vnd=r.value_vnd,
+            state=r.state,
+            created_at=r.created_at,
+            code_value=r.code_value,
+        )
+        for r in rows
+    ]
+
+
 __all__ = [
     "Grant",
+    "GrantRow",
     "RESERVATION_TTL",
     "available_count",
+    "grants_of_user",
     "mark_delivered",
     "reap_reservations",
     "reserve",

@@ -44,7 +44,10 @@ class MucMenu:
 BANG_MENU: Final[tuple[MucMenu, ...]] = (
     MucMenu("/", "Tổng quan", "tongquan", "/stats"),
     MucMenu("/kho", "Kho code", "kho", "/tonkho"),
-    MucMenu("/nguoidung", "Người dùng", "nguoidung", "/user", sap_co=True),
+    # Quyền là `/users` chứ không `/user`: đường dẫn của mục này trỏ tới trang DANH SÁCH.
+    # Khai `/user` ở đây thì một vai trò chỉ có `/user` sẽ thấy mục menu rồi bấm vào
+    # nhận 404 — trông như panel hỏng.
+    MucMenu("/nguoidung", "Người dùng", "nguoidung", "/users"),
     MucMenu("/cauchu", "Câu chữ bot", "cauchu", "/noidung", sap_co=True),
     MucMenu("/cauhinh", "Cấu hình", "cauhinh", "/cauhinh", sap_co=True),
     MucMenu("/bantin", "Bắn tin", "bantin", "/broadcast", sap_co=True),
