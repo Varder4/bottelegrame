@@ -2,63 +2,77 @@
 {% block tieu_de %}Đăng nhập{% endblock %}
 
 {% block than %}
-<main class="flex min-h-full items-center justify-center px-4 py-12">
-  <div class="w-full max-w-sm">
+<main class="flex min-h-full items-center justify-center px-6 py-16">
+  <div class="w-full max-w-[352px]">
 
-    <div class="mb-8 text-center">
-      <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl
-                  bg-slate-900 text-xl font-bold text-white">TV</div>
-      <h1 class="text-xl font-semibold tracking-tight text-slate-900">Quản trị TeleVip</h1>
-      <p class="mt-1 text-sm text-slate-500">Đăng nhập để tiếp tục</p>
-    </div>
-
-    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-      {% if loi %}
-      <div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
-        {{ loi }}
+    <div class="mb-10">
+      <div class="mb-6 flex h-9 w-9 items-center justify-center rounded-lg bg-neutral-900">
+        <span class="text-[13px] font-semibold tracking-tight text-white">TV</span>
       </div>
-      {% endif %}
-
-      {# `method="post"` thuần, không JavaScript: trang đăng nhập phải hoạt động kể cả khi
-         tệp tĩnh không tải được. Nó là đường duy nhất vào panel. #}
-      <form method="post" action="/dangnhap" class="space-y-4">
-        <div>
-          <label for="ten" class="mb-1.5 block text-sm font-medium text-slate-700">
-            Tên đăng nhập
-          </label>
-          <input id="ten" name="login_name" type="text" required autofocus
-                 autocomplete="username" autocapitalize="none" spellcheck="false"
-                 class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm
-                        text-slate-900 placeholder-slate-400 shadow-sm
-                        focus:border-slate-900 focus:outline-none focus:ring-1
-                        focus:ring-slate-900">
-        </div>
-
-        <div>
-          <label for="mk" class="mb-1.5 block text-sm font-medium text-slate-700">
-            Mật khẩu
-          </label>
-          <input id="mk" name="password" type="password" required
-                 autocomplete="current-password"
-                 class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm
-                        text-slate-900 placeholder-slate-400 shadow-sm
-                        focus:border-slate-900 focus:outline-none focus:ring-1
-                        focus:ring-slate-900">
-        </div>
-
-        <button type="submit"
-                class="w-full rounded-lg bg-slate-900 px-3 py-2.5 text-sm font-semibold
-                       text-white shadow-sm transition hover:bg-slate-700
-                       focus:outline-none focus:ring-2 focus:ring-slate-900
-                       focus:ring-offset-2">
-          Đăng nhập
-        </button>
-      </form>
+      <h1 class="text-[22px] font-semibold leading-tight tracking-tight text-neutral-900">
+        Đăng nhập
+      </h1>
+      <p class="mt-1.5 text-sm text-neutral-500">
+        Bảng quản trị TeleVip
+      </p>
     </div>
 
-    <p class="mt-6 text-center text-xs leading-relaxed text-slate-400">
-      Quên mật khẩu thì đặt lại bằng lệnh trên máy chủ —<br>
-      hệ thống không có email nên không có luồng gửi lại.
+    {% if loi %}
+    <div role="alert"
+         class="mb-5 flex gap-2.5 rounded-lg border border-red-100 bg-red-50/60 px-3.5 py-3">
+      <svg class="mt-0.5 h-4 w-4 shrink-0 text-red-500" viewBox="0 0 16 16" fill="currentColor"
+           aria-hidden="true">
+        <path fill-rule="evenodd"
+              d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM7.25 4.5a.75.75 0 011.5 0v4a.75.75
+                 0 01-1.5 0v-4zM8 11.75a.9.9 0 110-1.8.9.9 0 010 1.8z"
+              clip-rule="evenodd"/>
+      </svg>
+      <p class="text-sm leading-snug text-red-700">{{ loi }}</p>
+    </div>
+    {% endif %}
+
+    {# `method="post"` thuần, không JavaScript: trang này phải hoạt động kể cả khi tệp tĩnh
+       không tải được. Nó là đường duy nhất vào panel. #}
+    <form method="post" action="/dangnhap" class="space-y-5">
+      <div>
+        <label for="ten" class="mb-2 block text-[13px] font-medium text-neutral-700">
+          Tên đăng nhập
+        </label>
+        <input id="ten" name="login_name" type="text" required autofocus
+               autocomplete="username" autocapitalize="none" spellcheck="false"
+               class="block w-full rounded-lg border border-neutral-200 bg-white px-3.5 py-2.5
+                      text-[15px] text-neutral-900 placeholder-neutral-400 outline-none
+                      transition-colors
+                      hover:border-neutral-300
+                      focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50">
+      </div>
+
+      <div>
+        <label for="mk" class="mb-2 block text-[13px] font-medium text-neutral-700">
+          Mật khẩu
+        </label>
+        <input id="mk" name="password" type="password" required
+               autocomplete="current-password"
+               class="block w-full rounded-lg border border-neutral-200 bg-white px-3.5 py-2.5
+                      text-[15px] text-neutral-900 placeholder-neutral-400 outline-none
+                      transition-colors
+                      hover:border-neutral-300
+                      focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50">
+      </div>
+
+      <button type="submit"
+              class="w-full rounded-lg bg-neutral-900 px-3.5 py-2.5 text-[15px] font-medium
+                     text-white outline-none transition-colors
+                     hover:bg-neutral-800
+                     focus-visible:ring-4 focus-visible:ring-neutral-200
+                     active:bg-neutral-950">
+        Tiếp tục
+      </button>
+    </form>
+
+    <p class="mt-8 text-[13px] leading-relaxed text-neutral-400">
+      Quên mật khẩu thì đặt lại bằng lệnh trên máy chủ. Hệ thống không dùng email
+      nên không có luồng gửi lại.
     </p>
   </div>
 </main>

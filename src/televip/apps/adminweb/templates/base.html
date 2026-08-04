@@ -1,3 +1,16 @@
+{#
+  Khung chung của panel.
+
+  Ngôn ngữ thiết kế — hiện đại, tối giản, NỀN TRẮNG:
+
+  - Nền **trắng thuần**, không xám. Phân tách bằng ĐƯỜNG KẺ MẢNH và KHOẢNG TRỐNG chứ
+    không bằng khối màu. Đây mới là thứ tạo cảm giác sạch; đổ màu xám vào chỉ làm trang
+    nặng thêm mà không rõ hơn.
+  - **Đúng một màu nhấn** (indigo), dùng rất tiết kiệm: nút chính, mục đang mở, viền tiêu
+    điểm bàn phím. Màu ở đây có nghĩa là "chỗ này quan trọng"; rải khắp nơi là mất nghĩa.
+  - **Ba cỡ chữ, ba độ đậm.** Thứ bậc dựng bằng cỡ và sắc độ chữ, không bằng viền và bóng.
+  - **Gần như không bóng đổ.** Một mặt phẳng, không phải một chồng thẻ nổi.
+#}
 <!DOCTYPE html>
 <html lang="vi" class="h-full">
 <head>
@@ -8,7 +21,7 @@
   <link rel="stylesheet" href="/static/app.css">
   <link rel="icon" href="data:,">
 </head>
-<body class="h-full bg-slate-50 text-slate-800 antialiased"
+<body class="h-full bg-white text-[15px] leading-relaxed text-neutral-900 antialiased"
       {% if csrf %}hx-headers='{"X-TV-CSRF": "{{ csrf }}"}'{% endif %}>
 {% block than %}{% endblock %}
 <script src="/static/htmx.min.js" defer></script>

@@ -66,6 +66,26 @@ async def _truncate_all(s: AsyncSession) -> None:
     `RESTART IDENTITY CASCADE` để mọi test bắt đầu từ cùng một trạng thái, kể cả các
     sequence — nếu không, id sinh ra khác nhau giữa các lần chạy và test khó đọc.
     """
+    # ── HÀNG RÀO: hỏi CHÍNH KẾT NỐI này nó đang ở database nào ─────────────────────
+    #
+    # Kiểm hằng số `TEST_DATABASE_URL` ở đầu file là **không đủ**, và điều đó đã được
+    # chứng minh bằng thiệt hại thật: một fixture truyền session của engine TOÀN CỤC vào
+    # đây, mà engine toàn cục lúc đó đang trỏ vào database dev. `init_engine()` trả về
+    # sớm khi `_engine` khác None (`db/engine.py`), nên việc gọi lại nó với URL test
+    # KHÔNG đổi được engine — và `TRUNCATE` xoá sạch database dev: 220 mã code, 52 khoá
+    # cấu hình, nhóm bắt buộc, mẫu câu chữ, tài khoản admin.
+    #
+    # Hằng số nói lên **ý định**; câu hỏi dưới đây nói lên **sự thật**. Chỉ sự thật mới
+    # chặn được, và nó phải nằm ở đây — ngay trước câu lệnh phá huỷ — chứ không ở chỗ nào
+    # khác, vì mọi đường tới `TRUNCATE` đều đi qua đúng dòng này.
+    ten_db = (await s.execute(text("SELECT current_database()"))).scalar_one()
+    if not str(ten_db).endswith("_test"):
+        raise RuntimeError(
+            f"TỪ CHỐI TRUNCATE: kết nối đang ở database {ten_db!r}, không kết thúc bằng "
+            f"'_test'. Nhiều khả năng engine toàn cục đã được khởi tạo trỏ vào database "
+            f"dev trước khi fixture kịp trỏ nó sang database test."
+        )
+
     await s.execute(
         text("""
         TRUNCATE TABLE

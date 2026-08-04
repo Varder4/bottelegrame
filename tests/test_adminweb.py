@@ -40,32 +40,44 @@ _LENH = ("/stats", "/tonkho", "/add_giffcode", "/codes", "/user")
 
 @pytest_asyncio.fixture
 async def app_client() -> AsyncIterator[httpx.AsyncClient]:
-    """App thật, database test thật, Redis test thật — không giả lập gì."""
-    import televip.core.config as config_mod
+    """App thật, database test thật, Redis test thật — không giả lập gì.
+
+    ## Cách trỏ app sang database test, và vì sao KHÔNG vá `get_settings`
+
+    Bản đầu tiên của fixture này vá `televip.core.config.get_settings`. Nó **không có tác
+    dụng**: `apps/adminweb/app.py` viết `from televip.core.config import get_settings`, nên
+    tên đó đã được nối cứng vào module app từ lúc import — vá thuộc tính của module cấu
+    hình không đổi được cái tên đã nối.
+
+    Hậu quả thật: `create_app()` dựng engine trỏ vào database **dev**, rồi `_truncate_all()`
+    xoá sạch nó — mất 220 mã code, 52 khoá cấu hình, nhóm bắt buộc và tài khoản admin.
+
+    Cách đúng là **tự dựng engine và Redis trước**, rồi để `init_engine()` / `init_redis()`
+    bên trong `create_app()` trả về sớm (chúng thoát ngay khi đã được khởi tạo). Ở đây ta
+    dùng hành vi "trả về sớm" đó một cách CÓ CHỦ Ý, thay vì vấp phải nó.
+    """
+
     from televip.apps.adminweb.app import create_app
-    from televip.cache.client import close_redis
+    from televip.cache.client import close_redis, get_redis, init_redis
     from televip.db import engine as db_engine
 
-    goc = config_mod.get_settings
+    # Dọn sạch trạng thái toàn cục do test trước để lại, rồi tự dựng đúng đích ta muốn.
+    await db_engine.dispose_engine()
+    await close_redis()
 
-    def _cau_hinh() -> Any:
-        s = goc()
-        return SimpleNamespace(
-            **{
-                **{k: getattr(s, k) for k in s.model_fields},
-                "database_url": TEST_DATABASE_URL,
-                "redis_url": TEST_REDIS_URL,
-            }
-        )
+    db_engine.init_engine(
+        SimpleNamespace(database_url=TEST_DATABASE_URL, db_pool_size=15)  # type: ignore[arg-type]
+    )
+    init_redis(SimpleNamespace(redis_url=TEST_REDIS_URL))  # type: ignore[arg-type]
 
-    config_mod.get_settings = _cau_hinh  # type: ignore[assignment]
     try:
+        # `create_app()` gọi lại `init_engine`/`init_redis`; cả hai thấy đã khởi tạo và
+        # trả về ngay, nên app dùng đúng hai thứ ta vừa dựng ở trên.
         app = create_app()
-        async with db_session() as s:
-            await _truncate_all(s)
-            await s.commit()
-        from televip.cache.client import get_redis
 
+        async with db_session() as s:
+            await _truncate_all(s)  # tự kiểm `current_database()` — xem conftest
+            await s.commit()
         await get_redis().flushdb()
 
         transport = httpx.ASGITransport(app=app)
@@ -74,7 +86,6 @@ async def app_client() -> AsyncIterator[httpx.AsyncClient]:
         ) as client:
             yield client
     finally:
-        config_mod.get_settings = goc  # type: ignore[assignment]
         await db_engine.dispose_engine()
         await close_redis()
 
@@ -174,7 +185,10 @@ async def test_dang_nhap_dung_thi_vao_duoc(app_client: httpx.AsyncClient):
 
     trang = await app_client.get("/")
     assert trang.status_code == 200
-    assert "Quản trị TeleVip" in trang.text
+    # Khẳng định trên DỮ LIỆU chứ không trên câu chữ: tiêu đề trang còn đổi theo thiết kế,
+    # và một bài kiểm đỏ mỗi lần sửa giao diện sẽ sớm bị sửa cho xanh thay vì được đọc.
+    assert str(OWNER_ID) in trang.text
+    assert "owner" in trang.text
 
 
 @pytest.mark.asyncio

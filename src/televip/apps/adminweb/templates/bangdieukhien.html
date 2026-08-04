@@ -1,54 +1,78 @@
 {% extends "base.html" %}
-{% block tieu_de %}Bảng điều khiển{% endblock %}
+{% block tieu_de %}Tổng quan{% endblock %}
 
 {% block than %}
 <div class="min-h-full">
 
-  <header class="border-b border-slate-200 bg-white">
-    <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
-      <div class="flex items-center gap-3">
-        <div class="flex h-8 w-8 items-center justify-center rounded-lg
-                    bg-slate-900 text-sm font-bold text-white">TV</div>
-        <div>
-          <div class="text-sm font-semibold leading-tight text-slate-900">Quản trị TeleVip</div>
-          <div class="text-xs leading-tight text-slate-500">
-            {{ nguoi.user_id }} · <span class="font-medium">{{ nguoi.role }}</span>
-          </div>
+  {# Thanh trên: một đường kẻ mảnh, không bóng đổ, không nền xám. #}
+  <header class="sticky top-0 z-10 border-b border-neutral-100 bg-white/90 backdrop-blur">
+    <div class="mx-auto flex h-14 max-w-5xl items-center justify-between px-6">
+      <div class="flex items-center gap-2.5">
+        <div class="flex h-7 w-7 items-center justify-center rounded-md bg-neutral-900">
+          <span class="text-[11px] font-semibold tracking-tight text-white">TV</span>
         </div>
+        <span class="text-sm font-medium text-neutral-900">TeleVip</span>
       </div>
 
-      <form method="post" action="/dangxuat">
-        <button type="submit"
-                class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium
-                       text-slate-700 transition hover:bg-slate-50">
-          Đăng xuất
-        </button>
-      </form>
+      <div class="flex items-center gap-4">
+        <div class="hidden text-right sm:block">
+          <div class="text-[13px] font-medium leading-tight text-neutral-900">
+            {{ nguoi.user_id }}
+          </div>
+          <div class="text-[11px] uppercase leading-tight tracking-wide text-neutral-400">
+            {{ nguoi.role }}
+          </div>
+        </div>
+        <form method="post" action="/dangxuat">
+          <button type="submit"
+                  class="rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-neutral-500
+                         outline-none transition-colors hover:bg-neutral-50 hover:text-neutral-900
+                         focus-visible:ring-4 focus-visible:ring-neutral-100">
+            Đăng xuất
+          </button>
+        </form>
+      </div>
     </div>
   </header>
 
-  <main class="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+  <main class="mx-auto max-w-5xl px-6 py-12">
 
-    <div class="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4">
-      <h2 class="text-sm font-semibold text-amber-900">Panel đang ở giai đoạn dựng nền</h2>
-      <p class="mt-1 text-sm leading-relaxed text-amber-800">
-        Đăng nhập, phiên và phân quyền đã chạy thật. Các màn hình nghiệp vụ
-        (tồn kho, người dùng, câu chữ, nhật ký) là bước kế tiếp.
-        Trong lúc đó, mọi lệnh vẫn dùng được trong bot.
+    <div class="mb-12">
+      <h1 class="text-[26px] font-semibold leading-tight tracking-tight text-neutral-900">
+        Tổng quan
+      </h1>
+      <p class="mt-2 text-[15px] text-neutral-500">
+        Nền của panel đã chạy thật. Các màn hình nghiệp vụ đang được dựng —
+        trong lúc đó mọi lệnh vẫn dùng được trong bot.
+      </p>
+    </div>
+
+    {# Ô trạng thái: viền mảnh + một vạch màu bên trái. Không nền màu kín. #}
+    <div class="mb-12 border-l-2 border-indigo-500 pl-4">
+      <h2 class="text-sm font-medium text-neutral-900">Đang ở giai đoạn dựng nền</h2>
+      <p class="mt-1 max-w-2xl text-sm leading-relaxed text-neutral-500">
+        Đăng nhập, phiên, phân quyền và sổ kiểm toán đã hoạt động.
+        Tồn kho, người dùng, câu chữ và nhật ký là bước kế tiếp.
       </p>
     </div>
 
     <section>
-      <h2 class="mb-1 text-base font-semibold text-slate-900">Quyền của bạn</h2>
-      <p class="mb-4 text-sm text-slate-500">
-        {{ lenh_duoc_phep|length }} mục, đọc từ bảng phân quyền — cùng nguồn với bot.
-        Vai trò khác sẽ thấy danh sách khác.
+      <div class="mb-5 flex items-baseline justify-between border-b border-neutral-100 pb-3">
+        <h2 class="text-sm font-medium text-neutral-900">Quyền của bạn</h2>
+        <span class="text-[13px] tabular-nums text-neutral-400">
+          {{ lenh_duoc_phep|length }} mục
+        </span>
+      </div>
+
+      <p class="mb-6 max-w-2xl text-sm leading-relaxed text-neutral-500">
+        Đọc từ bảng phân quyền — cùng nguồn với bot. Người vai trò khác sẽ thấy danh sách
+        khác, và họ <em>không nhìn thấy</em> mục mình không được dùng chứ không phải bị ẩn đi.
       </p>
 
-      <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div class="grid gap-x-8 gap-y-0 sm:grid-cols-2 lg:grid-cols-3">
         {% for lenh in lenh_duoc_phep %}
-        <div class="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
-          <code class="text-sm font-medium text-slate-800">{{ lenh }}</code>
+        <div class="flex items-center border-b border-neutral-100 py-2.5">
+          <span class="font-mono text-[13px] text-neutral-700">{{ lenh }}</span>
         </div>
         {% endfor %}
       </div>
