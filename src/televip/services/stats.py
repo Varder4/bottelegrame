@@ -171,6 +171,16 @@ async def refresh_system_stats(db: AsyncSession) -> SystemSnapshot:
     )
 
 
+#: `system_stats` không có cột "đã xác minh", nên con số này luôn tính trực tiếp. Rẻ: một
+#: `count(*)` có điều kiện trên một cột đã đánh index, và nó chỉ chạy ở màn hình quản trị.
+_SQL_VERIFIED_USERS = "SELECT count(*) FROM users WHERE verified_at IS NOT NULL"
+
+
+async def verified_count(db: AsyncSession) -> int:
+    """Số người đã xác minh. Luôn LIVE — không có trong ảnh chụp `system_stats`."""
+    return int((await db.execute(text(_SQL_VERIFIED_USERS))).scalar_one())
+
+
 async def system_snapshot(db: AsyncSession) -> SystemSnapshot:
     """Số liệu tổng quan. Đọc bảng tổng hợp; **quá cũ hoặc chưa có thì tự tính lại**.
 

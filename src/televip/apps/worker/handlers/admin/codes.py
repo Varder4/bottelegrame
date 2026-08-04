@@ -52,6 +52,7 @@ from televip.db.models.codes import CODE_TYPES, Code
 from televip.domain import texts
 from televip.services import code_issuance, settings_service, text_service
 from televip.services.admin import Handler, admin_command, write_audit
+from televip.services.stock import StockRow, read_stock, summarize, warn_threshold
 from televip.telegram import keyboards
 
 log = get_logger(__name__)
@@ -71,17 +72,6 @@ GRANT_TYPE_TANTHU: Final = "tanthu"
 #: §13.4.2 mục 1 và 7b: "10 code đầu", "20 bản ghi mới nhất".
 SAMPLE_LIMIT: Final = 10
 LIST_LIMIT: Final = 20
-
-#: Ngưỡng cảnh báo tồn kho thấp.
-#:
-#: ⚠️ Có HAI khoá cùng nghĩa: yêu cầu của khối này đặt tên `stock.warn_threshold`, còn
-#: §13.6.7 đã khai `alert.low_code_threshold` = 50 và migration 0002 **đã seed nó**. Chỉ
-#: khoá đã seed mới sửa được bằng `/setcauhinh` (`settings_service.set()` từ chối khoá
-#: không tồn tại). Nên thứ tự đọc là: khoá mới → khoá đã seed → 50, để cái nút vặn hiện
-#: có vẫn thật sự vặn được. Gộp hai khoá làm một là việc của người chốt đặc tả.
-STOCK_WARN_KEY: Final = "stock.warn_threshold"
-LOW_CODE_KEY: Final = "alert.low_code_threshold"
-DEFAULT_WARN_THRESHOLD: Final = 50
 
 _VALUE_RE: Final = re.compile(r"^(\d+)([kK])?$")
 
@@ -395,78 +385,31 @@ async def handle_add_giffcode(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ── /tonkho ─────────────────────────────────────────────────────────
 
 
-#: Đếm thẳng trên `codes` chứ KHÔNG đọc `code_pool_stats`: bảng đếm sẵn đó chưa có trigger
-#: nào nuôi (`\d codes` cho 0 trigger), nên đọc nó là báo cáo toàn số 0 cho admin. Khi
-#: trigger về, đổi đúng câu này thành `SELECT … FROM code_pool_stats`.
-_SQL_STOCK = """
-SELECT code_type,
-       value_vnd,
-       count(*) FILTER (WHERE status = 'available') AS con_lai,
-       count(*) FILTER (WHERE status = 'issued')    AS da_phat,
-       count(*) FILTER (WHERE status = 'reserved')  AS giu_cho
-  FROM codes
- GROUP BY code_type, value_vnd
- ORDER BY code_type, value_vnd
-"""
-
-
-@dataclass(frozen=True, slots=True)
-class StockRow:
-    code_type: str
-    value_vnd: int
-    available: int
-    issued: int
-    reserved: int
-
-
-async def read_stock(db: AsyncSession) -> list[StockRow]:
-    rows = (await db.execute(text(_SQL_STOCK))).all()
-    return [
-        StockRow(
-            code_type=row.code_type,
-            value_vnd=row.value_vnd,
-            available=row.con_lai,
-            issued=row.da_phat,
-            reserved=row.giu_cho,
-        )
-        for row in rows
-    ]
-
-
-async def warn_threshold() -> int:
-    """Ngưỡng cảnh báo tồn kho thấp — xem ghi chú ở `STOCK_WARN_KEY`."""
-    seeded = await settings_service.get_int(LOW_CODE_KEY, DEFAULT_WARN_THRESHOLD)
-    return await settings_service.get_int(STOCK_WARN_KEY, seeded)
-
-
 def render_stock(rows: Sequence[StockRow], *, threshold: int) -> str:
+    """Câu chữ cho Telegram. Cách ĐẾM nằm ở `services/stock.py` — panel web đọc chung."""
     if not rows:
         return "📦 TỒN KHO CODE\n\nKho trống — chưa nạp mã nào."
 
     lines = ["📦 TỒN KHO CODE", texts.SEP_WIDE]
     current_type = ""
-    low_count = 0
     for row in rows:
         if row.code_type != current_type:
             current_type = row.code_type
             lines.append(f"📂 {current_type}")
-        low = row.available < threshold
-        if low:
-            low_count += 1
         detail = (
             f"còn {row.available} · đã phát {row.issued}"
-            f" · {texts.format_vnd(row.available * row.value_vnd)}đ"
+            f" · {texts.format_vnd(row.value_available_vnd)}đ"
         )
         if row.reserved:
             detail += f" · giữ chỗ {row.reserved}"
-        lines.append(f"{'⚠️' if low else '  '} {texts.value_label(row.value_vnd)}: {detail}")
+        dau = "⚠️" if row.low(threshold) else "  "
+        lines.append(f"{dau} {texts.value_label(row.value_vnd)}: {detail}")
 
-    total_available = sum(row.available for row in rows)
-    total_value = sum(row.available * row.value_vnd for row in rows)
+    tong = summarize(rows, threshold=threshold)
     lines.append(texts.SEP_WIDE)
-    lines.append(f"Σ Còn lại: {total_available} mã · {texts.format_vnd(total_value)}đ")
-    if low_count:
-        lines.append(f"⚠️ {low_count} mệnh giá dưới ngưỡng {threshold} — cần nạp thêm.")
+    lines.append(f"Σ Còn lại: {tong.available} mã · {texts.format_vnd(tong.value_vnd)}đ")
+    if tong.low_count:
+        lines.append(f"⚠️ {tong.low_count} mệnh giá dưới ngưỡng {threshold} — cần nạp thêm.")
     return "\n".join(lines)
 
 

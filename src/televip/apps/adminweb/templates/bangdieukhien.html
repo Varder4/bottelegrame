@@ -12,28 +12,33 @@
   </p>
 </div>
 
-{# ── Bốn thẻ số liệu ─────────────────────────────────────────────────
-   Giai đoạn 0 chưa nối số thật. Cố ý hiện dấu gạch chứ KHÔNG hiện số 0:
-   một con số 0 trông y hệt một con số thật, và người đọc sẽ tin nó. #}
+{# ── Cảnh báo kho ────────────────────────────────────────────────────
+   Chỉ hiện với người có quyền `/tonkho`, và chỉ khi thật sự có mệnh giá dưới ngưỡng.
+   Một dải cảnh báo luôn hiện là một dải không ai đọc. #}
+{% if canh_bao_kho and canh_bao_kho.low_count %}
+<a href="/kho" class="flex items-center gap-3 mb-6 p-4 rounded-lg bg-amber-50
+                      border border-amber-200 hover:bg-amber-100 transition-colors">
+  <span class="text-amber-500 shrink-0">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+  <span class="text-sm text-amber-900">
+    <span class="font-medium">{{ canh_bao_kho.low_count }} mệnh giá</span>
+    đang dưới ngưỡng {{ canh_bao_kho.nguong|vnd }} mã — cần nạp thêm.
+  </span>
+  <span class="ml-auto text-sm text-amber-700 shrink-0">Xem kho →</span>
+</a>
+{% endif %}
+
+{% if xem_stats %}
+{# ── Số liệu hệ thống ────────────────────────────────────────────── #}
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
   <div class="bg-white rounded-lg shadow p-6">
     <div class="flex items-center justify-between">
       <div>
-        <p class="text-sm font-medium text-gray-600">Tồn kho code</p>
-        <p class="mt-2 text-3xl font-bold text-gray-300">—</p>
-      </div>
-      <div class="p-3 bg-primary-100 rounded-full text-primary-600">
-        {{ ic.icon('kho', 'w-8 h-8') }}
-      </div>
-    </div>
-  </div>
-
-  <div class="bg-white rounded-lg shadow p-6">
-    <div class="flex items-center justify-between">
-      <div>
         <p class="text-sm font-medium text-gray-600">Người dùng</p>
-        <p class="mt-2 text-3xl font-bold text-gray-300">—</p>
+        <p class="mt-2 text-3xl font-bold text-gray-900">{{ anh_chup.total_users|vnd }}</p>
+        <p class="mt-1 text-xs text-gray-500">
+          {{ da_xac_minh|vnd }} đã xác minh
+        </p>
       </div>
       <div class="p-3 bg-green-100 rounded-full text-green-600">
         {{ ic.icon('nguoidung', 'w-8 h-8') }}
@@ -44,8 +49,28 @@
   <div class="bg-white rounded-lg shadow p-6">
     <div class="flex items-center justify-between">
       <div>
-        <p class="text-sm font-medium text-gray-600">Đã phát hôm nay</p>
-        <p class="mt-2 text-3xl font-bold text-gray-300">—</p>
+        <p class="text-sm font-medium text-gray-600">Code khả dụng</p>
+        <p class="mt-2 text-3xl font-bold text-gray-900">{{ anh_chup.codes_available|vnd }}</p>
+        {% if canh_bao_kho %}
+        <p class="mt-1 text-xs text-gray-500">
+          <a href="/kho" class="text-primary-600 hover:underline">xem theo mệnh giá</a>
+        </p>
+        {% endif %}
+      </div>
+      <div class="p-3 bg-primary-100 rounded-full text-primary-600">
+        {{ ic.icon('kho', 'w-8 h-8') }}
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-lg shadow p-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm font-medium text-gray-600">Code đã phát</p>
+        <p class="mt-2 text-3xl font-bold text-gray-900">{{ anh_chup.codes_issued|vnd }}</p>
+        <p class="mt-1 text-xs text-gray-500">
+          {{ anh_chup.total_referrals|vnd }} lượt mời đạt chuẩn
+        </p>
       </div>
       <div class="p-3 bg-yellow-100 rounded-full text-yellow-600">
         {{ ic.icon('tien', 'w-8 h-8') }}
@@ -56,36 +81,28 @@
   <div class="bg-white rounded-lg shadow p-6">
     <div class="flex items-center justify-between">
       <div>
-        <p class="text-sm font-medium text-gray-600">Quyền của bạn</p>
-        <p class="mt-2 text-3xl font-bold text-gray-900">{{ so_muc }}</p>
+        <p class="text-sm font-medium text-gray-600">Đã phát ra</p>
+        <p class="mt-2 text-3xl font-bold text-primary-600">
+          {{ anh_chup.total_value_vnd|vnd }}đ
+        </p>
+        <p class="mt-1 text-xs text-gray-500">tổng giá trị đã trao</p>
       </div>
       <div class="p-3 bg-gray-100 rounded-full text-gray-600">
-        {{ ic.icon('khoa', 'w-8 h-8') }}
+        {{ ic.icon('baocao', 'w-8 h-8') }}
       </div>
     </div>
   </div>
 
 </div>
 
-{# ── Ghi chú trạng thái ──────────────────────────────────────────── #}
-<div class="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
-  <div class="p-4 border-b border-gray-200 flex items-center gap-2">
-    <span class="text-amber-500">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
-    <h2 class="font-medium text-gray-900">Panel đang ở giai đoạn dựng nền</h2>
-  </div>
-  <div class="p-4 text-sm leading-relaxed text-gray-600">
-    <p>
-      Đăng nhập, phiên, phân quyền và sổ kiểm toán đã <span class="font-medium
-      text-gray-900">chạy thật</span>. Các màn hình gắn nhãn
-      <span class="text-[10px] uppercase tracking-wide text-gray-400">sắp có</span>
-      trong thanh bên đang được dựng lần lượt.
-    </p>
-    <p class="mt-2">
-      Trong lúc đó mọi thao tác vẫn dùng được trong bot. Các thẻ số liệu ở trên hiện dấu
-      gạch chứ không hiện số 0 — một con số 0 trông y hệt một con số thật.
-    </p>
-  </div>
-</div>
+{# Mốc ảnh chụp là bắt buộc, không phải trang trí: `system_stats` do job làm mới định kỳ,
+   nên các con số trên KHÔNG phải "ngay bây giờ". Người đọc phải biết mình đang nhìn lúc
+   nào — nhất là khi đang so hai màn hình để tìm một chênh lệch. #}
+<p class="mt-4 text-xs text-gray-400">
+  Ảnh chụp lúc {{ anh_chup.updated_at|giovn }} · làm mới bởi job định kỳ.
+  Riêng số đã xác minh luôn tính trực tiếp.
+</p>
+{% endif %}
 
 {# ── Danh sách quyền ─────────────────────────────────────────────── #}
 <div class="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
@@ -102,6 +119,8 @@
         <span class="text-sm">{{ muc.nhan }}</span>
         {% if not muc.duoc_phep %}
         <span class="ml-auto text-[10px] uppercase tracking-wide">không có quyền</span>
+        {% elif muc.sap_co %}
+        <span class="ml-auto text-[10px] uppercase tracking-wide text-gray-400">sắp có</span>
         {% endif %}
       </div>
       {% endfor %}
@@ -109,6 +128,8 @@
     <p class="mt-4 text-xs leading-relaxed text-gray-400">
       Danh sách đọc từ bảng phân quyền — cùng nguồn với bot. Vai trò khác sẽ thấy danh
       sách khác, và mục không có quyền thì <em>không bấm được</em> chứ không phải chỉ bị ẩn.
+      Màn hình gắn nhãn <span class="uppercase tracking-wide">sắp có</span> đang được dựng
+      lần lượt; trong lúc đó thao tác tương ứng vẫn dùng được trong bot.
     </p>
   </div>
 </div>

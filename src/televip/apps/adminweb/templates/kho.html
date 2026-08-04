@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Kho code{% endblock %}
+
+{% block than %}
+
+<div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+  <div>
+    <h1 class="text-3xl font-bold text-gray-900">Kho code</h1>
+    <p class="mt-2 text-gray-600">
+      Tồn kho theo loại × mệnh giá. Ngưỡng cảnh báo hiện tại:
+      <span class="font-medium text-gray-900">{{ nguong|vnd }} mã</span>.
+    </p>
+  </div>
+  {% if tong.low_count %}
+  <div class="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-50 border border-amber-200
+              text-amber-800 text-sm">
+    <span class="text-amber-500">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+    {{ tong.low_count }} mệnh giá dưới ngưỡng — cần nạp thêm
+  </div>
+  {% endif %}
+</div>
+
+{# ── Bốn con số tổng ─────────────────────────────────────────────────
+   Cộng bởi `stock.summarize()`, cùng hàm mà `/tonkho` của bot dùng ở chân tin nhắn. #}
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  <div class="bg-white rounded-lg shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Còn lại</p>
+    <p class="mt-1 text-2xl font-bold text-gray-900">{{ tong.available|vnd }}</p>
+  </div>
+  <div class="bg-white rounded-lg shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Giá trị tồn</p>
+    <p class="mt-1 text-2xl font-bold text-primary-600">{{ tong.value_vnd|vnd }}đ</p>
+  </div>
+  <div class="bg-white rounded-lg shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Đã phát</p>
+    <p class="mt-1 text-2xl font-bold text-gray-900">{{ tong.issued|vnd }}</p>
+  </div>
+  <div class="bg-white rounded-lg shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Đang giữ chỗ</p>
+    <p class="mt-1 text-2xl font-bold text-gray-900">{{ tong.reserved|vnd }}</p>
+    <p class="mt-1 text-xs text-gray-400">mã đã bấm nhận, chưa gửi xong</p>
+  </div>
+</div>
+
+{% if not nhom %}
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-10 text-center">
+  <div class="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-full
+              text-gray-400 mb-4">{{ ic.icon('kho', 'w-7 h-7') }}</div>
+  <p class="font-medium text-gray-900">Kho trống</p>
+  <p class="mt-1 text-sm text-gray-500">Chưa nạp mã nào. Nạp bằng lệnh
+    <code class="px-1.5 py-0.5 bg-gray-100 rounded text-gray-700">/add_giffcode</code>
+    trong bot.</p>
+</div>
+{% endif %}
+
+{% for g in nhom %}
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6 overflow-hidden">
+  <div class="p-4 border-b border-gray-200 flex items-center gap-2.5">
+    <span class="text-primary-600">{{ ic.icon('kho', 'w-5 h-5') }}</span>
+    <h2 class="font-medium text-gray-900">{{ g.nhan }}</h2>
+    <span class="text-xs text-gray-400">{{ g.ma_loai }}</span>
+  </div>
+
+  {# Bảng cuộn NGANG trong khung của nó, không kéo cả trang lệch đi trên điện thoại. #}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3">Mệnh giá</th>
+          <th class="text-right font-medium px-4 py-3">Còn lại</th>
+          <th class="text-right font-medium px-4 py-3">Giữ chỗ</th>
+          <th class="text-right font-medium px-4 py-3">Đã phát</th>
+          <th class="text-right font-medium px-4 py-3">Giá trị tồn</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for d in g.dong %}
+        <tr class="{% if d.thap %}bg-amber-50/60{% endif %}">
+          <td class="px-4 py-3">
+            <span class="font-medium text-gray-900">{{ d.r.value_vnd|menh_gia }}</span>
+            {% if d.thap %}
+            <span class="ml-2 text-[10px] uppercase tracking-wide text-amber-700">thấp</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 text-right tabular-nums
+                     {% if d.thap %}text-amber-700 font-medium{% else %}text-gray-900{% endif %}">
+            {{ d.r.available|vnd }}
+          </td>
+          <td class="px-4 py-3 text-right tabular-nums
+                     {% if d.r.reserved %}text-gray-900{% else %}text-gray-300{% endif %}">
+            {{ d.r.reserved|vnd }}
+          </td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-600">{{ d.r.issued|vnd }}</td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-600">
+            {{ d.r.value_available_vnd|vnd }}đ
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+
+{% if nhom %}
+<p class="text-xs leading-relaxed text-gray-400">
+  Đếm thẳng trên bảng <code>codes</code> mỗi lần mở trang — không đọc bảng đếm sẵn
+  <code>code_pool_stats</code>, vì bảng đó chưa có trigger nào nuôi và sẽ trả về toàn số 0.
+  Mã đã thu hồi không hiện ở đây, nên một mệnh giá bị thu hồi hết sẽ là một dòng toàn số 0.
+</p>
+{% endif %}
+
+{% endblock %}

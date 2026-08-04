@@ -47,6 +47,7 @@ from televip.db.engine import session, transaction
 from televip.domain import texts
 from televip.services import admin as admin_service
 from televip.services import settings_service, text_service
+from televip.services import stats as stats_service
 
 log = get_logger(__name__)
 
@@ -467,8 +468,6 @@ SELECT total_users, codes_available, codes_issued, total_referrals, total_value_
  WHERE id = 1
 """
 
-_SQL_VERIFIED_USERS = "SELECT count(*) FROM users WHERE verified_at IS NOT NULL"
-
 _SQL_STATS_DIRECT = """
 SELECT (SELECT count(*) FROM users)                                        AS total_users,
        (SELECT count(*) FROM codes WHERE status = 'available')             AS codes_available,
@@ -492,7 +491,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     async with session() as db:
         row = (await db.execute(text(_SQL_SYSTEM_STATS))).one_or_none()
         # `system_stats` không có cột "đã xác minh", nên con số này LUÔN tính trực tiếp.
-        verified = (await db.execute(text(_SQL_VERIFIED_USERS))).scalar_one()
+        verified = await stats_service.verified_count(db)
         if row is None:
             row = (await db.execute(text(_SQL_STATS_DIRECT))).one()
             source = "tính TRỰC TIẾP từ database (bảng system_stats chưa có dữ liệu)"

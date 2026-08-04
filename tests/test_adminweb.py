@@ -26,7 +26,13 @@ from sqlalchemy import text
 
 from televip.db.engine import session as db_session
 from televip.services import admin_auth
-from tests.conftest import TEST_DATABASE_URL, TEST_REDIS_URL, _truncate_all, make_user
+from tests.conftest import (
+    TEST_DATABASE_URL,
+    TEST_REDIS_URL,
+    _truncate_all,
+    add_codes,
+    make_user,
+)
 
 OWNER_ID = 990_001
 CSKH_ID = 990_002
@@ -407,16 +413,141 @@ async def test_owner_thay_du_muc(app_client: httpx.AsyncClient):
     assert 'href="/bantin"' not in trang
 
 
-@pytest.mark.asyncio
-async def test_the_so_lieu_hien_dau_gach_chu_KHONG_hien_so_0(app_client: httpx.AsyncClient):
-    """Giai đoạn 0 chưa nối số thật. Một con số 0 trông y hệt một con số thật.
+# ── Số liệu thật: kho và thống kê ───────────────────────────────────
+#
+# Panel là tầng trình bày THỨ HAI trên cùng một `services/`. Điều duy nhất đáng đo ở đây là
+# nó có nói **cùng một con số** với bot hay không — chứ không phải trang có mở được không.
 
-    In `0` ở đây nghĩa là màn hình nói "kho rỗng" và "chưa ai nhận code" — hai câu đều SAI,
-    và người đọc không có cách nào biết chúng chỉ là chỗ trống.
+
+async def _nap_kho() -> None:
+    """Kho có hai loại, ba mệnh giá, một trong đó cố ý để dưới ngưỡng."""
+    async with db_session() as s:
+        await add_codes(s, code_type="tanthu", value_vnd=10_000, count=7, prefix="A")
+        await add_codes(s, code_type="tanthu", value_vnd=50_000, count=2, prefix="B")
+        await add_codes(s, code_type="event", value_vnd=88_000, count=4, prefix="E")
+    await run_sql(
+        """
+        INSERT INTO settings (key, value, value_type, label_vi)
+             VALUES ('stock.warn_threshold', '3'::jsonb, 'int', 'Ngưỡng cảnh báo tồn kho')
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """
+    )
+    from televip.services import settings_service
+
+    settings_service.invalidate()
+
+
+@pytest.mark.asyncio
+async def test_man_kho_hien_dung_con_so_cua_service(app_client: httpx.AsyncClient):
+    """Con số trên màn hình phải bằng con số `services/stock.py` trả về, không phải xấp xỉ."""
+    await _dung_admin()
+    await _nap_kho()
+    await _dang_nhap(app_client)
+
+    r = await app_client.get("/kho")
+    assert r.status_code == 200
+
+    # Đối chiếu với chính service — cùng nguồn mà `/tonkho` của bot đọc.
+    from televip.services import stock
+
+    async with db_session() as s:
+        rows = await stock.read_stock(s)
+    tong = stock.summarize(rows, threshold=await stock.warn_threshold())
+    assert tong.available == 13
+
+    assert f">{tong.available}<" in r.text.replace("\n", "").replace(" ", "")
+    # 7×10.000 + 2×50.000 + 4×88.000 = 522.000
+    assert "522.000đ" in r.text
+    assert "Tân thủ" in r.text and "Đập hộp" in r.text
+
+
+@pytest.mark.asyncio
+async def test_man_kho_danh_dau_menh_gia_duoi_nguong(app_client: httpx.AsyncClient):
+    """Ngưỡng = 3, mệnh giá 50K còn 2 mã ⇒ phải được đánh dấu.
+
+    Đây là con số người vận hành cần HÀNH ĐỘNG. Một bảng đúng nhưng không chỉ ra chỗ sắp
+    hết thì người ta chỉ biết mình hết mã lúc người dùng bấm nhận và không có gì.
     """
     await _dung_admin()
+    await _nap_kho()
     await _dang_nhap(app_client)
+
+    trang = (await app_client.get("/kho")).text
+    assert "mệnh giá dưới ngưỡng" in trang, "kho có mệnh giá thấp mà không có cảnh báo nào"
+
+    # Dải cảnh báo cũng phải hiện ở trang tổng quan, kèm đường dẫn sang kho.
+    tong_quan = (await app_client.get("/")).text
+    assert 'href="/kho"' in tong_quan
+    assert "đang dưới ngưỡng" in tong_quan
+
+
+@pytest.mark.asyncio
+async def test_cskh_bi_tu_choi_man_kho_du_da_dang_nhap(app_client: httpx.AsyncClient):
+    """Gác theo MẢNH: `cskh` vẫn vào được tổng quan, chỉ mất đúng màn hình kho.
+
+    Gác cả trang tổng quan bằng `/tonkho` thì mọi `cskh` nhận 404 ngay sau khi đăng nhập —
+    panel thành thứ họ không dùng được.
+    """
+    from televip.services import admin as admin_service
+
+    async with db_session() as s:
+        await make_user(s, CSKH_ID)
+        await s.commit()
+    await run_sql(
+        "INSERT INTO admin_users (user_id, role, added_by) VALUES (:u, 'cskh', :u)",
+        {"u": CSKH_ID},
+    )
+    for lenh in ("/stats", "/user"):
+        await run_sql(
+            "INSERT INTO admin_permissions (role, command) VALUES ('cskh', :c) "
+            "ON CONFLICT DO NOTHING",
+            {"c": lenh},
+        )
+    admin_service.invalidate_role(CSKH_ID)
+    async with db_session() as s:
+        await admin_auth.set_password(s, user_id=CSKH_ID, login_name="nhanvien", password=MAT_KHAU)
+        await s.commit()
+    await _nap_kho()
+
+    await _dang_nhap(app_client, ten="nhanvien")
+
+    assert (await app_client.get("/")).status_code == 200, "cskh phải vào được tổng quan"
+    assert (await app_client.get("/kho")).status_code == 404
+
+    # Và không được rò chi tiết kho qua dải cảnh báo của trang tổng quan.
+    tong_quan = (await app_client.get("/")).text
+    assert "mệnh giá" not in tong_quan
+    # Nhưng `/stats` thì cskh CÓ quyền, nên số liệu hệ thống vẫn hiện.
+    assert "Ảnh chụp lúc" in tong_quan
+
+
+@pytest.mark.asyncio
+async def test_tong_quan_hien_so_that_khong_phai_cho_trong(app_client: httpx.AsyncClient):
+    await _dung_admin()
+    await _nap_kho()
+    async with db_session() as s:
+        for uid in (991_101, 991_102, 991_103):
+            await make_user(s, uid)
+    await _dang_nhap(app_client)
+
     trang = (await app_client.get("/")).text
 
-    assert "Tồn kho code" in trang
-    assert ">—<" in trang, "thẻ số liệu phải hiện dấu gạch khi chưa có số thật"
+    from televip.db.engine import transaction
+    from televip.services import stats as stats_service
+
+    async with transaction() as s:
+        anh = await stats_service.system_snapshot(s)
+
+    assert anh.total_users >= 4  # 3 người vừa tạo + chính owner
+    assert f">{anh.total_users}<" in trang.replace("\n", "").replace(" ", "")
+    assert f">{anh.codes_available}<" in trang.replace("\n", "").replace(" ", "")
+    assert "Ảnh chụp lúc" in trang, "số liệu là ảnh chụp — không nói rõ lúc nào là nói dối"
+
+
+def test_nhan_loai_phu_het_CODE_TYPES() -> None:
+    """Thêm một loại code mà quên đặt nhãn thì bảng kho hiện mã thô — bài này bắt sớm."""
+    from televip.apps.adminweb.routes.kho import NHAN_LOAI
+    from televip.db.models.codes import CODE_TYPES
+
+    thieu = [t for t in CODE_TYPES if t not in NHAN_LOAI]
+    assert thieu == [], f"loại code chưa có nhãn tiếng Việt trong màn kho: {thieu}"

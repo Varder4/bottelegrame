@@ -43,7 +43,7 @@ class MucMenu:
 #: Thứ tự ở đây là thứ tự hiện trên màn hình.
 BANG_MENU: Final[tuple[MucMenu, ...]] = (
     MucMenu("/", "Tổng quan", "tongquan", "/stats"),
-    MucMenu("/kho", "Kho code", "kho", "/tonkho", sap_co=True),
+    MucMenu("/kho", "Kho code", "kho", "/tonkho"),
     MucMenu("/nguoidung", "Người dùng", "nguoidung", "/user", sap_co=True),
     MucMenu("/cauchu", "Câu chữ bot", "cauchu", "/noidung", sap_co=True),
     MucMenu("/cauhinh", "Cấu hình", "cauhinh", "/cauhinh", sap_co=True),

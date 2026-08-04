@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 
@@ -27,9 +28,11 @@ from fastapi.templating import Jinja2Templates
 
 from televip.apps.adminweb.security import SecurityHeaders
 from televip.cache.client import close_redis, init_redis
+from televip.core.clock import VN_TZ
 from televip.core.config import get_settings
 from televip.core.logging import get_logger, setup_logging
 from televip.db.engine import dispose_engine, init_engine
+from televip.domain import texts
 
 log = get_logger(__name__)
 
@@ -41,6 +44,26 @@ STATIC_DIR: Final = _HERE / "static"
 #: đây vì nó là hàng rào XSS chính: `users.full_name` là văn bản tự do do 19.151 người tự
 #: đặt, và panel hiện nó ra. Không bao giờ dùng `|safe` trên dữ liệu người dùng.
 templates: Final = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+#: Định dạng số dùng chung với bot — cùng một hàm, nên `10.000đ` trên web và trong tin nhắn
+#: Telegram không bao giờ khác nhau một dấu chấm. Đăng ký làm bộ lọc Jinja thay vì định
+#: dạng sẵn trong route: template mới không phải nhớ gọi nó ở tầng dưới.
+templates.env.filters["vnd"] = texts.format_vnd
+templates.env.filters["menh_gia"] = texts.value_label
+
+
+def _gio_vn(moment: datetime | None) -> str:
+    """Mốc thời gian theo giờ Việt Nam. Người vận hành ở VN, database lưu UTC.
+
+    In thẳng UTC ra màn hình là mời người đọc tự trừ 7 tiếng — và họ sẽ quên đúng một lần,
+    vào lúc đang so hai mốc để tìm nguyên nhân một sự cố.
+    """
+    if moment is None:
+        return "—"
+    return moment.astimezone(VN_TZ).strftime("%H:%M %d/%m/%Y")
+
+
+templates.env.filters["giovn"] = _gio_vn
 
 
 @asynccontextmanager
@@ -81,10 +104,11 @@ def create_app() -> FastAPI:
 
     app.add_middleware(SecurityHeaders, secure=app.state.secure_cookies)
 
-    from televip.apps.adminweb.routes import auth, dashboard
+    from televip.apps.adminweb.routes import auth, dashboard, kho
 
     app.include_router(auth.router)
     app.include_router(dashboard.router)
+    app.include_router(kho.router)
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
