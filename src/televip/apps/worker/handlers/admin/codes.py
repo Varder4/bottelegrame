@@ -617,18 +617,6 @@ SELECT count(*)::int                        AS so_ma,
    AND (:value_vnd = 0 OR value_vnd = :value_vnd)
 """
 
-#: Thu hồi hàng loạt. `status = 'available'` trong `WHERE` là hàng rào thật, không phải
-#: bộ lọc cho đẹp: mã đã giữ chỗ hoặc đã phát nằm ngoài phạm vi câu này, nên không có
-#: đường nào để một lần gõ nhầm chạm vào mã đang thuộc về một người thật.
-_SQL_REVOKE_BULK = """
-UPDATE codes
-   SET status = 'revoked'
- WHERE code_type = :code_type
-   AND status = 'available'
-   AND (:value_vnd = 0 OR value_vnd = :value_vnd)
-RETURNING code_id, value_vnd
-"""
-
 
 def _ticket_key(ticket: str) -> str:
     return f"{DEL_ALL_TICKET_PREFIX}{ticket}"
@@ -910,11 +898,7 @@ async def _del_all_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     async with transaction() as db:
-        rows = (
-            await db.execute(
-                text(_SQL_REVOKE_BULK), {"code_type": code_type, "value_vnd": value_vnd}
-            )
-        ).all()
+        rows = await code_issuance.revoke_bulk(db, code_type=code_type, value_vnd=value_vnd)
         tong_vnd = sum(r.value_vnd for r in rows)
         if rows:
             await write_audit(
@@ -974,14 +958,6 @@ SELECT c.code_id,
  WHERE c.code_value = :code
 """
 
-_SQL_REVOKE = """
-UPDATE codes
-   SET status = 'revoked'
- WHERE code_id = :cid
-   AND status = 'available'
-RETURNING code_id
-"""
-
 
 @admin_command(CMD_DEL)
 async def handle_del_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1036,7 +1012,7 @@ async def _revoke_code(
     if row.status == "revoked":
         return f"⚠️ Code {code_value} đã bị thu hồi trước đó.", None
 
-    revoked = (await db.execute(text(_SQL_REVOKE), {"cid": row.code_id})).scalar_one_or_none()
+    revoked = await code_issuance.revoke_one(db, code_id=row.code_id)
     if revoked is None:
         # `status` không còn `available` giữa lượt đọc và lượt ghi — một luồng khác vừa giữ
         # chỗ mã này. Điều kiện trong câu UPDATE là thứ chặn, không phải câu `if` phía trên.

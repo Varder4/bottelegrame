@@ -38,6 +38,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -411,6 +412,67 @@ async def available_count(db: AsyncSession, *, code_type: str, value_vnd: int) -
     ).scalar_one()
 
 
+# ── Thu hồi ─────────────────────────────────────────────────────────
+#
+# Hai hàm dưới đây là NƠI DUY NHẤT được đổi `codes.status` sang `revoked`. Trước đây hai
+# câu `UPDATE codes` này nằm thẳng trong `handlers/admin/codes.py` — tức là ở tầng trình
+# bày, nơi mà `scripts/check_architecture.py` (luật 3) cấm. Bộ canh kiến trúc bắt được
+# đúng hai chỗ đó.
+#
+# Việc dời xuống đây không phải dọn dẹp cho gọn: sắp có tầng trình bày THỨ HAI (panel web)
+# gọi vào cùng nghiệp vụ này. Để nguyên thì hàng rào `status = 'available'` phải được viết
+# lại lần thứ hai ở panel, và hai bản sao chép sớm muộn cũng lệch nhau — lần lệch đó sẽ là
+# lần một câu UPDATE chạm vào mã đang thuộc về một người thật.
+
+#: `status = 'available'` trong `WHERE` là hàng rào thật, không phải bộ lọc cho đẹp: mã đã
+#: giữ chỗ hoặc đã phát nằm ngoài phạm vi câu này, nên không có đường nào để một lần gõ
+#: nhầm chạm vào mã đang thuộc về một người thật.
+_SQL_REVOKE_ONE = """
+UPDATE codes
+   SET status = 'revoked'
+ WHERE code_id = :cid
+   AND status = 'available'
+RETURNING code_id
+"""
+
+_SQL_REVOKE_BULK = """
+UPDATE codes
+   SET status = 'revoked'
+ WHERE code_type = :code_type
+   AND status = 'available'
+   AND (:value_vnd = 0 OR value_vnd = :value_vnd)
+RETURNING code_id, value_vnd
+"""
+
+
+async def revoke_one(db: AsyncSession, *, code_id: int) -> int | None:
+    """Thu hồi MỘT mã chưa phát. Trả `code_id` đã thu, hoặc `None` nếu mã không còn khả dụng.
+
+    `None` nghĩa là mã vừa bị người khác giành mất, hoặc đã phát rồi — nơi gọi phải coi đó
+    là "không thu được" chứ không phải lỗi.
+
+    KHÔNG `DELETE`: hàng dữ liệu ở lại để đối soát vẫn ra số. Hệ cũ xoá thẳng hàng, kể cả
+    mã đã trao cho người dùng, và sổ cái thủng.
+    """
+    return (await db.execute(text(_SQL_REVOKE_ONE), {"cid": code_id})).scalar_one_or_none()
+
+
+async def revoke_bulk(db: AsyncSession, *, code_type: str, value_vnd: int = 0) -> list[Any]:
+    """Thu hồi TOÀN BỘ mã chưa phát của một loại. `value_vnd = 0` nghĩa là không lọc mệnh giá.
+
+    Trả về các dòng `(code_id, value_vnd)` đã thu — nơi gọi cộng lại để báo tổng giá trị.
+
+    ⚠️ Hàm này KHÔNG kiểm ngưỡng duyệt hai người. Hàng rào đó phụ thuộc *ai* đang gọi và
+    *kho lúc nào*, nên nó nằm ở nơi gọi (`handlers/admin/codes.py`, và sau này là panel).
+    Đây là một chỗ hở đã biết: xem `docs/ke-hoach-v2/16-admin-web.md` mục 0.1 — nhóm hàng
+    rào tiền còn nằm ở tầng trình bày, và kế hoạch panel web dời chúng vào trong.
+    """
+    rows = await db.execute(
+        text(_SQL_REVOKE_BULK), {"code_type": code_type, "value_vnd": value_vnd}
+    )
+    return list(rows.all())
+
+
 __all__ = [
     "Grant",
     "RESERVATION_TTL",
@@ -418,4 +480,6 @@ __all__ = [
     "mark_delivered",
     "reap_reservations",
     "reserve",
+    "revoke_bulk",
+    "revoke_one",
 ]
