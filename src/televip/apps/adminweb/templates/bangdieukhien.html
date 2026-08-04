@@ -1,83 +1,116 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ic %}
 {% block tieu_de %}Tổng quan{% endblock %}
 
 {% block than %}
-<div class="min-h-full">
 
-  {# Thanh trên: một đường kẻ mảnh, không bóng đổ, không nền xám. #}
-  <header class="sticky top-0 z-10 border-b border-neutral-100 bg-white/90 backdrop-blur">
-    <div class="mx-auto flex h-14 max-w-5xl items-center justify-between px-6">
-      <div class="flex items-center gap-2.5">
-        <div class="flex h-7 w-7 items-center justify-center rounded-md bg-neutral-900">
-          <span class="text-[11px] font-semibold tracking-tight text-white">TV</span>
-        </div>
-        <span class="text-sm font-medium text-neutral-900">TeleVip</span>
-      </div>
-
-      <div class="flex items-center gap-4">
-        <div class="hidden text-right sm:block">
-          <div class="text-[13px] font-medium leading-tight text-neutral-900">
-            {{ nguoi.user_id }}
-          </div>
-          <div class="text-[11px] uppercase leading-tight tracking-wide text-neutral-400">
-            {{ nguoi.role }}
-          </div>
-        </div>
-        <form method="post" action="/dangxuat">
-          <button type="submit"
-                  class="rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-neutral-500
-                         outline-none transition-colors hover:bg-neutral-50 hover:text-neutral-900
-                         focus-visible:ring-4 focus-visible:ring-neutral-100">
-            Đăng xuất
-          </button>
-        </form>
-      </div>
-    </div>
-  </header>
-
-  <main class="mx-auto max-w-5xl px-6 py-12">
-
-    <div class="mb-12">
-      <h1 class="text-[26px] font-semibold leading-tight tracking-tight text-neutral-900">
-        Tổng quan
-      </h1>
-      <p class="mt-2 text-[15px] text-neutral-500">
-        Nền của panel đã chạy thật. Các màn hình nghiệp vụ đang được dựng —
-        trong lúc đó mọi lệnh vẫn dùng được trong bot.
-      </p>
-    </div>
-
-    {# Ô trạng thái: viền mảnh + một vạch màu bên trái. Không nền màu kín. #}
-    <div class="mb-12 border-l-2 border-indigo-500 pl-4">
-      <h2 class="text-sm font-medium text-neutral-900">Đang ở giai đoạn dựng nền</h2>
-      <p class="mt-1 max-w-2xl text-sm leading-relaxed text-neutral-500">
-        Đăng nhập, phiên, phân quyền và sổ kiểm toán đã hoạt động.
-        Tồn kho, người dùng, câu chữ và nhật ký là bước kế tiếp.
-      </p>
-    </div>
-
-    <section>
-      <div class="mb-5 flex items-baseline justify-between border-b border-neutral-100 pb-3">
-        <h2 class="text-sm font-medium text-neutral-900">Quyền của bạn</h2>
-        <span class="text-[13px] tabular-nums text-neutral-400">
-          {{ lenh_duoc_phep|length }} mục
-        </span>
-      </div>
-
-      <p class="mb-6 max-w-2xl text-sm leading-relaxed text-neutral-500">
-        Đọc từ bảng phân quyền — cùng nguồn với bot. Người vai trò khác sẽ thấy danh sách
-        khác, và họ <em>không nhìn thấy</em> mục mình không được dùng chứ không phải bị ẩn đi.
-      </p>
-
-      <div class="grid gap-x-8 gap-y-0 sm:grid-cols-2 lg:grid-cols-3">
-        {% for lenh in lenh_duoc_phep %}
-        <div class="flex items-center border-b border-neutral-100 py-2.5">
-          <span class="font-mono text-[13px] text-neutral-700">{{ lenh }}</span>
-        </div>
-        {% endfor %}
-      </div>
-    </section>
-
-  </main>
+<div class="mb-6">
+  <h1 class="text-3xl font-bold text-gray-900">Tổng quan</h1>
+  <p class="mt-2 text-gray-600">
+    Bảng quản trị bot <span class="font-medium text-gray-900">TeleVip</span> —
+    xin chào {{ nguoi.user_id }}.
+  </p>
 </div>
+
+{# ── Bốn thẻ số liệu ─────────────────────────────────────────────────
+   Giai đoạn 0 chưa nối số thật. Cố ý hiện dấu gạch chứ KHÔNG hiện số 0:
+   một con số 0 trông y hệt một con số thật, và người đọc sẽ tin nó. #}
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+
+  <div class="bg-white rounded-lg shadow p-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm font-medium text-gray-600">Tồn kho code</p>
+        <p class="mt-2 text-3xl font-bold text-gray-300">—</p>
+      </div>
+      <div class="p-3 bg-primary-100 rounded-full text-primary-600">
+        {{ ic.icon('kho', 'w-8 h-8') }}
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-lg shadow p-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm font-medium text-gray-600">Người dùng</p>
+        <p class="mt-2 text-3xl font-bold text-gray-300">—</p>
+      </div>
+      <div class="p-3 bg-green-100 rounded-full text-green-600">
+        {{ ic.icon('nguoidung', 'w-8 h-8') }}
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-lg shadow p-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm font-medium text-gray-600">Đã phát hôm nay</p>
+        <p class="mt-2 text-3xl font-bold text-gray-300">—</p>
+      </div>
+      <div class="p-3 bg-yellow-100 rounded-full text-yellow-600">
+        {{ ic.icon('tien', 'w-8 h-8') }}
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-lg shadow p-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm font-medium text-gray-600">Quyền của bạn</p>
+        <p class="mt-2 text-3xl font-bold text-gray-900">{{ so_muc }}</p>
+      </div>
+      <div class="p-3 bg-gray-100 rounded-full text-gray-600">
+        {{ ic.icon('khoa', 'w-8 h-8') }}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{# ── Ghi chú trạng thái ──────────────────────────────────────────── #}
+<div class="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
+  <div class="p-4 border-b border-gray-200 flex items-center gap-2">
+    <span class="text-amber-500">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+    <h2 class="font-medium text-gray-900">Panel đang ở giai đoạn dựng nền</h2>
+  </div>
+  <div class="p-4 text-sm leading-relaxed text-gray-600">
+    <p>
+      Đăng nhập, phiên, phân quyền và sổ kiểm toán đã <span class="font-medium
+      text-gray-900">chạy thật</span>. Các màn hình gắn nhãn
+      <span class="text-[10px] uppercase tracking-wide text-gray-400">sắp có</span>
+      trong thanh bên đang được dựng lần lượt.
+    </p>
+    <p class="mt-2">
+      Trong lúc đó mọi thao tác vẫn dùng được trong bot. Các thẻ số liệu ở trên hiện dấu
+      gạch chứ không hiện số 0 — một con số 0 trông y hệt một con số thật.
+    </p>
+  </div>
+</div>
+
+{# ── Danh sách quyền ─────────────────────────────────────────────── #}
+<div class="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
+  <div class="p-4 border-b border-gray-200 flex items-center justify-between">
+    <h2 class="font-medium text-gray-900">Màn hình bạn được dùng</h2>
+    <span class="text-sm text-gray-500">{{ so_muc }} / {{ menu|length }}</span>
+  </div>
+  <div class="p-4">
+    <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {% for muc in menu %}
+      <div class="flex items-center gap-2.5 px-3 py-2 rounded-lg
+                  {% if muc.duoc_phep %}text-gray-700{% else %}text-gray-300{% endif %}">
+        {{ ic.icon(muc.icon, 'w-4 h-4 shrink-0') }}
+        <span class="text-sm">{{ muc.nhan }}</span>
+        {% if not muc.duoc_phep %}
+        <span class="ml-auto text-[10px] uppercase tracking-wide">không có quyền</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <p class="mt-4 text-xs leading-relaxed text-gray-400">
+      Danh sách đọc từ bảng phân quyền — cùng nguồn với bot. Vai trò khác sẽ thấy danh
+      sách khác, và mục không có quyền thì <em>không bấm được</em> chứ không phải chỉ bị ẩn.
+    </p>
+  </div>
+</div>
+
 {% endblock %}

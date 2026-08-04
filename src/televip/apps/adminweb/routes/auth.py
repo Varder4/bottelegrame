@@ -56,7 +56,7 @@ async def trang_dang_nhap(request: Request) -> Response:
             return RedirectResponse("/", status_code=303)
 
     return _templates().TemplateResponse(  # type: ignore[attr-defined]
-        request, "dangnhap.html", {"loi": None, "csrf": None}
+        request, "dangnhap.html", {"loi": None, "csrf": None, "nguoi": None}
     )
 
 
@@ -78,6 +78,7 @@ async def dang_nhap(
                 {
                     "loi": f"Sai quá nhiều lần. Thử lại sau {con_khoa // 60 + 1} phút.",
                     "csrf": None,
+                    "nguoi": None,
                 },
                 status_code=429,
             )
@@ -89,7 +90,10 @@ async def dang_nhap(
             await security.note_login_fail(ip=ip, login_name=login_name)
             log.warning("adminweb_dang_nhap_sai", ip=ip, ten=login_name)
             return _templates().TemplateResponse(  # type: ignore[attr-defined]
-                request, "dangnhap.html", {"loi": _SAI, "csrf": None}, status_code=401
+                request,
+                "dangnhap.html",
+                {"loi": _SAI, "csrf": None, "nguoi": None},
+                status_code=401,
             )
 
     async with transaction() as db:

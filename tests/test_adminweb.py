@@ -351,3 +351,72 @@ async def test_dang_nhap_hong_KHONG_ghi_so_thanh_cong(app_client: httpx.AsyncCli
     await _dang_nhap(app_client, mk="saibet123456")
 
     assert await scalar("SELECT count(*) FROM audit_log WHERE action = 'adminweb.dangnhap'") == 0
+
+
+# ── Thanh bên: menu gác bằng quyền thật ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_menu_chi_hien_muc_nguoi_do_co_quyen(app_client: httpx.AsyncClient):
+    """`cskh` không NHÌN THẤY mục "Kho code" — vì bảng phân quyền không có hàng đó.
+
+    Đây là điều tách panel này khỏi cách làm của source tham chiếu: bên đó menu là một
+    mảng cứng chọn theo `role === 'CSKH'`, nên đổi quyền bằng lệnh thì menu không biết gì
+    và hiện ra một danh sách sai. Ở đây menu đọc thẳng `admin_permissions`.
+    """
+    from televip.services import admin as admin_service
+
+    # `cskh` chỉ có `/stats` và `/user`, KHÔNG có `/tonkho`.
+    async with db_session() as s:
+        await make_user(s, CSKH_ID)
+        await s.commit()
+    await run_sql(
+        "INSERT INTO admin_users (user_id, role, added_by) VALUES (:u, 'cskh', :u)",
+        {"u": CSKH_ID},
+    )
+    for lenh in ("/stats", "/user"):
+        await run_sql(
+            "INSERT INTO admin_permissions (role, command) VALUES ('cskh', :c) "
+            "ON CONFLICT DO NOTHING",
+            {"c": lenh},
+        )
+    admin_service.invalidate_role(CSKH_ID)
+    async with db_session() as s:
+        await admin_auth.set_password(s, user_id=CSKH_ID, login_name="nhanvien", password=MAT_KHAU)
+        await s.commit()
+
+    assert (await _dang_nhap(app_client, ten="nhanvien")).status_code == 303
+    trang = (await app_client.get("/")).text
+
+    # Thanh bên: mục có quyền phải là thẻ <a>, mục không có quyền không được xuất hiện.
+    assert 'href="/nguoidung"' in trang, "cskh có quyền /user nhưng không thấy mục Người dùng"
+    assert 'href="/kho"' not in trang, "cskh KHÔNG có quyền /tonkho mà vẫn thấy liên kết Kho code"
+    assert 'href="/bantin"' not in trang
+
+
+@pytest.mark.asyncio
+async def test_owner_thay_du_muc(app_client: httpx.AsyncClient):
+    await _dung_admin()
+    await _dang_nhap(app_client)
+    trang = (await app_client.get("/")).text
+
+    # `_LENH` chỉ cấp 5 quyền, nên owner trong bài này thấy đúng những mục tương ứng.
+    assert 'href="/kho"' in trang
+    assert 'href="/nguoidung"' in trang
+    # `/broadcast` không nằm trong `_LENH` ⇒ không được hiện.
+    assert 'href="/bantin"' not in trang
+
+
+@pytest.mark.asyncio
+async def test_the_so_lieu_hien_dau_gach_chu_KHONG_hien_so_0(app_client: httpx.AsyncClient):
+    """Giai đoạn 0 chưa nối số thật. Một con số 0 trông y hệt một con số thật.
+
+    In `0` ở đây nghĩa là màn hình nói "kho rỗng" và "chưa ai nhận code" — hai câu đều SAI,
+    và người đọc không có cách nào biết chúng chỉ là chỗ trống.
+    """
+    await _dung_admin()
+    await _dang_nhap(app_client)
+    trang = (await app_client.get("/")).text
+
+    assert "Tồn kho code" in trang
+    assert ">—<" in trang, "thẻ số liệu phải hiện dấu gạch khi chưa có số thật"
