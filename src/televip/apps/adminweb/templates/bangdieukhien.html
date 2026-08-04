@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block tieu_de %}Bảng điều khiển{% endblock %}
+
+{% block than %}
+<div class="min-h-full">
+
+  <header class="border-b border-slate-200 bg-white">
+    <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
+      <div class="flex items-center gap-3">
+        <div class="flex h-8 w-8 items-center justify-center rounded-lg
+                    bg-slate-900 text-sm font-bold text-white">TV</div>
+        <div>
+          <div class="text-sm font-semibold leading-tight text-slate-900">Quản trị TeleVip</div>
+          <div class="text-xs leading-tight text-slate-500">
+            {{ nguoi.user_id }} · <span class="font-medium">{{ nguoi.role }}</span>
+          </div>
+        </div>
+      </div>
+
+      <form method="post" action="/dangxuat">
+        <button type="submit"
+                class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium
+                       text-slate-700 transition hover:bg-slate-50">
+          Đăng xuất
+        </button>
+      </form>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+
+    <div class="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4">
+      <h2 class="text-sm font-semibold text-amber-900">Panel đang ở giai đoạn dựng nền</h2>
+      <p class="mt-1 text-sm leading-relaxed text-amber-800">
+        Đăng nhập, phiên và phân quyền đã chạy thật. Các màn hình nghiệp vụ
+        (tồn kho, người dùng, câu chữ, nhật ký) là bước kế tiếp.
+        Trong lúc đó, mọi lệnh vẫn dùng được trong bot.
+      </p>
+    </div>
+
+    <section>
+      <h2 class="mb-1 text-base font-semibold text-slate-900">Quyền của bạn</h2>
+      <p class="mb-4 text-sm text-slate-500">
+        {{ lenh_duoc_phep|length }} mục, đọc từ bảng phân quyền — cùng nguồn với bot.
+        Vai trò khác sẽ thấy danh sách khác.
+      </p>
+
+      <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {% for lenh in lenh_duoc_phep %}
+        <div class="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+          <code class="text-sm font-medium text-slate-800">{{ lenh }}</code>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+  </main>
+</div>
+{% endblock %}

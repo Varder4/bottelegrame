@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="vi" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block tieu_de %}Quản trị{% endblock %} · TeleVip</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" href="data:,">
+</head>
+<body class="h-full bg-slate-50 text-slate-800 antialiased"
+      {% if csrf %}hx-headers='{"X-TV-CSRF": "{{ csrf }}"}'{% endif %}>
+{% block than %}{% endblock %}
+<script src="/static/htmx.min.js" defer></script>
+</body>
+</html>
