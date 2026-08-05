@@ -247,3 +247,151 @@ async def test_cache_giu_gia_tri_cu_cho_toi_khi_refresh(config_db: AsyncSession)
 
     await settings_service.refresh(db=config_db)
     assert await settings_service.get_int("cooldown.start", db=config_db) == 99
+
+
+# ── Hàng rào duyệt hai người ────────────────────────────────────────
+#
+# Mười khoá `sensitive` đang che những con số đắt nhất hệ thống: `event.prize_table` (xác
+# suất trúng của tiền thật), `code.tanthu_value_vnd` (mệnh giá × 19.151 người),
+# `event.budget_cap_vnd`, và `admin.dual_approval_threshold_vnd` — chính cái ngưỡng bật/tắt
+# mọi luật duyệt hai người còn lại.
+#
+# Cho tới gần đây, câu từ chối duy nhất nằm trong handler Telegram. `settings_service.set()`
+# *ghi lại* `approved_by` vào sổ nhưng **không bao giờ đòi** nó. Đứng yên được suốt thời
+# gian chỉ có một tầng gọi. Panel web là tầng gọi thứ hai.
+#
+# Ba bài dưới đây gọi THẲNG service, không đi qua handler nào — đó là điểm của chúng.
+
+
+async def test_khoa_sensitive_khong_doi_duoc_neu_thieu_nguoi_duyet(
+    config_db: AsyncSession,
+) -> None:
+    await config_db.execute(
+        update(Setting).where(Setting.key == "code.tanthu_value_vnd").values(sensitive=True)
+    )
+    await config_db.commit()
+    settings_service.invalidate()
+
+    truoc = await settings_service.get_int("code.tanthu_value_vnd", db=config_db)
+
+    with pytest.raises(settings_service.SensitiveSettingLocked) as loi:
+        await settings_service.set(
+            "code.tanthu_value_vnd", truoc + 90_000, updated_by=1, db=config_db
+        )
+    assert loi.value.key == "code.tanthu_value_vnd"
+
+    # Và giá trị KHÔNG đổi — một lời từ chối có ghi log mà vẫn ghi vào bảng thì vô nghĩa.
+    settings_service.invalidate()
+    assert await settings_service.get_int("code.tanthu_value_vnd", db=config_db) == truoc
+
+
+async def test_khoa_sensitive_doi_duoc_khi_co_nguoi_duyet(config_db: AsyncSession) -> None:
+    """Hàng rào phải MỞ được, nếu không nó chỉ là một khoá chết."""
+    await config_db.execute(
+        update(Setting).where(Setting.key == "code.tanthu_value_vnd").values(sensitive=True)
+    )
+    await config_db.commit()
+
+    await settings_service.set(
+        "code.tanthu_value_vnd", 25_000, updated_by=111, approved_by=222, db=config_db
+    )
+    await config_db.commit()
+    settings_service.invalidate()
+
+    assert await settings_service.get_int("code.tanthu_value_vnd", db=config_db) == 25_000
+    # Chữ ký người duyệt phải vào sổ, nếu không thì "đã duyệt" là một lời nói suông.
+    dong = (
+        (
+            await config_db.execute(
+                select(SettingsAudit)
+                .where(SettingsAudit.key == "code.tanthu_value_vnd")
+                .order_by(SettingsAudit.audit_id.desc())
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert dong is not None
+    assert dong.approved_by == 222
+    assert dong.changed_by == 111
+
+
+async def test_tu_choi_sensitive_TRUOC_khi_kiem_kieu(config_db: AsyncSession) -> None:
+    """Lý do từ chối phải là "cần duyệt hai người", không phải "sai kiểu".
+
+    Gõ lại cho đúng kiểu rồi vẫn bị chặn là một vòng lặp không dẫn tới đâu, và người vận
+    hành sẽ kết luận panel hỏng.
+    """
+    await config_db.execute(
+        update(Setting).where(Setting.key == "code.tanthu_value_vnd").values(sensitive=True)
+    )
+    await config_db.commit()
+
+    with pytest.raises(settings_service.SensitiveSettingLocked):
+        # Giá trị SAI KIỂU (chuỗi cho khoá money_vnd) — vẫn phải ra lỗi sensitive.
+        await settings_service.set(
+            "code.tanthu_value_vnd", "mười nghìn", updated_by=1, db=config_db
+        )
+
+
+async def test_moi_khoa_sensitive_trong_seed_deu_bi_hang_rao_che(
+    config_db: AsyncSession,
+) -> None:
+    """Quét TOÀN BỘ khoá `sensitive` đang seed, không chỉ một khoá mẫu.
+
+    Bài kiểm một-khoá-mẫu sẽ vẫn xanh nếu ai đó thêm một khoá tiền mới mà quên bật cờ, hay
+    nếu hàng rào chỉ chặn đúng khoá được chọn làm mẫu.
+    """
+    khoa = list(
+        (await config_db.execute(select(Setting.key).where(Setting.sensitive))).scalars().all()
+    )
+    assert khoa, "seed phải có ít nhất một khoá sensitive — nếu không, hàng rào này vô nghĩa"
+
+    for k in khoa:
+        with pytest.raises(settings_service.SensitiveSettingLocked):
+            # Giá trị không quan trọng: hàng rào chặn TRƯỚC khi tới bước kiểm kiểu.
+            await settings_service.set(k, 1, updated_by=1, db=config_db)
+
+
+# ── Che khoá bí mật ─────────────────────────────────────────────────
+
+
+async def test_khoa_khop_mau_bi_mat_thi_gia_tri_KHONG_roi_service(
+    config_db: AsyncSession,
+) -> None:
+    """Bảng `settings` hôm nay chưa có khoá nào khớp mẫu — đó chính là lý do phải kiểm.
+
+    Hàng rào này là hàng rào cho NGÀY MAI: nó tồn tại để một khoá `*.token` thêm vào sau
+    này không lặng lẽ hiện nguyên văn. Một hàng rào chưa từng chạy là một hàng rào chưa
+    biết có chạy hay không.
+
+    Và trên web nó rộng hơn trên Telegram: HTML nằm trong cache trình duyệt, trong lịch sử,
+    trong ảnh chụp màn hình.
+    """
+    await config_db.execute(
+        insert(Setting).values(
+            key="thanhtoan.api_token",
+            value="bi-mat-that-su",
+            value_type="string",
+            label_vi="Token cổng thanh toán",
+        )
+    )
+    await config_db.commit()
+
+    dong = await settings_service.get_setting(config_db, "thanhtoan.api_token")
+    assert dong is not None
+    assert dong.bi_che is True
+    assert dong.value is None, "giá trị bí mật KHÔNG được rời khỏi service"
+
+    # Và nó vẫn nằm trong danh sách — che chứ không giấu. Giấu hẳn thì người vận hành
+    # không biết khoá đó tồn tại và sẽ đi tìm nó ở chỗ khác.
+    tat_ca = await settings_service.list_settings(config_db)
+    assert "thanhtoan.api_token" in {d.key for d in tat_ca}
+    assert all(d.value is None for d in tat_ca if d.bi_che)
+
+
+async def test_mau_bi_mat_khop_theo_chuoi_con_khong_phan_biet_hoa_thuong() -> None:
+    for key in ("x.api_key", "A.TOKEN", "db.PASSWORD", "hmac_pepper", "auth.private_key"):
+        assert settings_service.is_secret(key), key
+    for key in ("code.tanthu_value_vnd", "event.prize_table", "leaderboard.top_n"):
+        assert not settings_service.is_secret(key), key

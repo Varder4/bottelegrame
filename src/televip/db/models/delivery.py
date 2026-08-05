@@ -379,8 +379,12 @@ class Setting(Base, UpdatedAtMixin):
     """**Nơi ở của mọi con số nghiệp vụ** (nguyên tắc N2: không con số nào nằm trong code).
 
     Hệ cũ phải `nano config.py` trên VPS rồi restart để đổi một mệnh giá. Đọc: cache
-    trong tiến trình TTL 60 giây, nạp toàn bảng (vài chục dòng) trong một truy vấn;
-    ghi xong phát `NOTIFY settings_changed` để mọi worker nạp lại ngay.
+    trong tiến trình TTL 60 giây, nạp toàn bảng (vài chục dòng) trong một truy vấn.
+
+    ⚠️ Bản trước của ghi chú này viết "ghi xong phát `NOTIFY settings_changed` để mọi
+    worker nạp lại ngay". **Không có cơ chế đó** — không `LISTEN/NOTIFY`, không kênh Redis.
+    Mỗi tiến trình tự nạp lại khi bản sao của CHÍNH NÓ quá 60 giây, nên sàn lan truyền là
+    60 giây và không rút ngắn được từ xa. Xem `services/settings_service.py`.
     Ghi: chỉ qua `/setcauhinh`, validate `value_type` + `min/max`, luôn ghi `settings_audit`.
 
     Cấu hình **nhiều dòng** không nhét vào đây mà giữ bảng riêng (`required_chats`,

@@ -28,6 +28,7 @@ yêu cầu cũ của `07-db.md` — xem `campaign_window()`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Final
 
 from sqlalchemy import text
@@ -364,6 +365,8 @@ async def campaign_window(db: AsyncSession) -> CampaignWindow:
 
 __all__ = [
     "CODE_TYPE",
+    "DongChienDich",
+    "list_campaigns",
     "DEFAULT_INTERVAL",
     "DEFAULT_MAX_CLAIMS",
     "DEFAULT_MAX_RISK_SCORE",
@@ -382,3 +385,62 @@ __all__ = [
     "progress",
     "qualify",
 ]
+
+
+#: Danh sách chiến dịch cho màn hình quản trị. Khác `_SQL_CAMPAIGN` ở trên: câu kia trả lời
+#: "có chiến dịch nào đang chạy không" (một dòng, mới nhất); câu này trả lời "đã có những
+#: chiến dịch nào" — và nó phải hiện cả những chiến dịch đã tắt hoặc hết hạn, vì đó là chỗ
+#: người vận hành nhìn ra một chiến dịch tưởng đã dừng mà cờ `is_active` vẫn bật.
+_SQL_CAMPAIGN_LIST = """
+SELECT campaign_id, code, name, interval_people, reward_value_vnd, max_claims,
+       is_active, starts_at, ends_at,
+       (is_active
+        AND (starts_at IS NULL OR starts_at <= now())
+        AND ends_at IS NOT NULL
+        AND ends_at > now())                                        AS dang_chay,
+       GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (ends_at - now()))))::bigint AS con_lai_giay
+  FROM campaigns
+ ORDER BY campaign_id DESC
+ LIMIT :lim
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class DongChienDich:
+    campaign_id: int
+    code: str
+    name: str
+    interval_people: int
+    reward_value_vnd: int
+    max_claims: int
+    is_active: bool
+    starts_at: datetime | None
+    ends_at: datetime | None
+    dang_chay: bool
+    con_lai_giay: int | None
+
+
+async def list_campaigns(db: AsyncSession, *, limit: int = 20) -> list[DongChienDich]:
+    """Chiến dịch gần nhất, mới nhất trước — kể cả đã tắt và đã hết hạn.
+
+    Hiện cả những chiến dịch **bật mà vô hình** là chủ ý: `campaign_window()` chỉ đọc dòng
+    mới nhất thoả điều kiện, nên một dòng cũ còn `is_active` vẫn nằm đó mà không màn hình
+    nào nói ra. Đây là màn hình nói ra nó.
+    """
+    rows = (await db.execute(text(_SQL_CAMPAIGN_LIST), {"lim": limit})).all()
+    return [
+        DongChienDich(
+            campaign_id=r.campaign_id,
+            code=r.code,
+            name=r.name,
+            interval_people=r.interval_people,
+            reward_value_vnd=r.reward_value_vnd,
+            max_claims=r.max_claims,
+            is_active=r.is_active,
+            starts_at=r.starts_at,
+            ends_at=r.ends_at,
+            dang_chay=r.dang_chay,
+            con_lai_giay=None if r.con_lai_giay is None else int(r.con_lai_giay),
+        )
+        for r in rows
+    ]

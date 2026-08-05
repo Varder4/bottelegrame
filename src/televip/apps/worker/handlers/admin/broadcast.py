@@ -82,20 +82,10 @@ PREVIEW_CHARS: Final = 1_200
 #: và cùng lý do với `text_service.MAX_RENDERED_LENGTH`.
 MAX_CONTENT_CHARS: Final = 4_000
 
-#: Nhãn tiếng Việt của `audience`, dùng trong mọi màn hình của file này.
-AUDIENCE_LABEL: Final[dict[str, str]] = {
-    "active_30d": f"hoạt động {broadcast_service.ACTIVE_WINDOW_DAYS} ngày gần đây",
-    "all": "TOÀN BỘ người đã /start",
-    "custom": "danh sách chỉ định",
-}
-
-JOB_STATE_LABEL: Final[dict[str, str]] = {
-    "draft": "nháp, chờ xác nhận",
-    "running": "đang chạy",
-    "paused": "đang tạm dừng",
-    "done": "đã xong",
-    "cancelled": "đã huỷ",
-}
+# Hai bảng nhãn đã chuyển sang service: panel web cũng hiện `audience` và `state`, và hai
+# màn hình gọi cùng một tệp người nhận bằng hai tên khác nhau là chỗ người vận hành đọc
+# nhầm. Nhập lại dưới tên cũ.
+from televip.services.broadcast import AUDIENCE_LABEL, JOB_STATE_LABEL  # noqa: E402
 
 
 class BroadcastArgError(ValueError):

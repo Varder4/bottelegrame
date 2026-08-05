@@ -44,6 +44,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Final
 
 from sqlalchemy import text
@@ -449,6 +450,115 @@ __all__ = [
     "normalize_command",
     "require_permission",
     "revoke",
+    "DongNhatKy",
+    "audit_actions",
+    "list_audit",
     "user_exists",
     "write_audit",
 ]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Đọc sổ kiểm toán
+# ══════════════════════════════════════════════════════════════════════
+#
+# Trước bản này, trong toàn bộ `src/` **không có một câu SELECT nào trên `audit_log`**. Sổ
+# được ghi rất kỹ và không ai đọc được — đúng trạng thái của hệ cũ, chỉ khác là ở đó sổ
+# nghèo, còn ở đây sổ giàu mà không có cửa sổ nhìn vào.
+
+
+@dataclass(frozen=True, slots=True)
+class DongNhatKy:
+    log_id: int
+    actor_type: str
+    actor_id: int | None
+    action: str
+    entity_type: str | None
+    entity_id: str | None
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
+    created_at: datetime
+
+    @property
+    def ip(self) -> str | None:
+        """IP nằm trong `after->>'ip'` — không phải một cột riêng.
+
+        Không phải mọi dòng đều có: chỉ những đường ghi đi qua panel web mới đính kèm. Một
+        dòng thiếu `ip` nghĩa là thao tác đó đến từ Telegram, không phải là dữ liệu hỏng.
+        """
+        if not isinstance(self.after, dict):
+            return None
+        gia_tri = self.after.get("ip")
+        return gia_tri if isinstance(gia_tri, str) else None
+
+
+#: Phân trang **keyset**, không OFFSET: `audit_log` chỉ tăng, và `OFFSET 10000` là một lần
+#: quét bỏ 10.000 dòng cho mỗi lần bấm "trang sau". `log_id` tăng đơn điệu nên nó vừa là
+#: con trỏ vừa là thứ tự — không cần cột thứ hai để phá hoà.
+_SQL_AUDIT_LIST = """
+SELECT log_id, actor_type, actor_id, action, entity_type, entity_id,
+       before, after, created_at
+  FROM audit_log
+ WHERE (CAST(:action AS text) IS NULL OR action = CAST(:action AS text))
+   AND (CAST(:actor AS bigint) IS NULL OR actor_id = CAST(:actor AS bigint))
+   AND (CAST(:tu AS timestamptz) IS NULL OR created_at >= CAST(:tu AS timestamptz))
+   AND (CAST(:den AS timestamptz) IS NULL OR created_at < CAST(:den AS timestamptz))
+   AND (CAST(:cursor AS bigint) IS NULL OR log_id < CAST(:cursor AS bigint))
+ ORDER BY log_id DESC
+ LIMIT :lim
+"""
+
+#: Danh sách `action` để dựng ô lọc. Đọc **từ dữ liệu**, không phải một mảng cứng: một
+#: danh sách cứng sẽ thiếu đúng cái action mới thêm — tức cái người ta đang đi tìm.
+_SQL_AUDIT_ACTIONS = """
+SELECT action, count(*)::bigint AS so_dong
+  FROM audit_log
+ GROUP BY action
+ ORDER BY action
+"""
+
+
+async def list_audit(
+    db: AsyncSession,
+    *,
+    action: str | None = None,
+    actor_id: int | None = None,
+    tu: datetime | None = None,
+    den: datetime | None = None,
+    cursor: int | None = None,
+    limit: int = 50,
+) -> list[DongNhatKy]:
+    """Nhật ký, mới nhất trước. `cursor` là `log_id` của dòng cuối trang trước."""
+    rows = (
+        await db.execute(
+            text(_SQL_AUDIT_LIST),
+            {
+                "action": action,
+                "actor": actor_id,
+                "tu": tu,
+                "den": den,
+                "cursor": cursor,
+                "lim": limit,
+            },
+        )
+    ).all()
+    return [
+        DongNhatKy(
+            log_id=r.log_id,
+            actor_type=r.actor_type,
+            actor_id=r.actor_id,
+            action=r.action,
+            entity_type=r.entity_type,
+            entity_id=r.entity_id,
+            before=r.before,
+            after=r.after,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+async def audit_actions(db: AsyncSession) -> list[tuple[str, int]]:
+    """`(action, số dòng)` — nguồn cho ô lọc, đọc từ chính dữ liệu."""
+    rows = (await db.execute(text(_SQL_AUDIT_ACTIONS))).all()
+    return [(r.action, r.so_dong) for r in rows]

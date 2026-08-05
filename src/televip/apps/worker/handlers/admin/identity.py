@@ -23,10 +23,8 @@ Hai hàng rào về quyền riêng tư, cả hai đều cố ý:
 
 from __future__ import annotations
 
-import ipaddress
 from typing import Any, Final
 
-from sqlalchemy import text
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -34,19 +32,17 @@ from televip.apps.worker.handlers.admin.ops import resolve_user
 from televip.core.clock import VN_TZ
 from televip.core.logging import get_logger
 from televip.db.engine import session
+from televip.services import identity_admin
 from televip.services.admin import Handler, admin_command
+
+# Nhập lại dưới tên cũ: phần ĐỌC và hai hàng rào riêng tư đã chuyển sang service để panel
+# web dùng chung. Câu chữ ở lại đây.
+from televip.services.identity_admin import DANG_CHU_Y, LIMIT, parse_ip, rut_gon_ip
+from televip.services.identity_admin import nhan_tin_hieu as _nhan
 
 log = get_logger(__name__)
 
 CMD: Final = "/checkip"
-
-#: Số dòng tối đa mỗi khối. Một IP của nhà mạng di động có thể gắn với hàng trăm tài
-#: khoản; in hết vừa vượt trần Telegram vừa không ai đọc.
-LIMIT: Final = 20
-
-#: Từ bao nhiêu tài khoản dùng chung thì đánh dấu. KHÔNG phải ngưỡng chặn — không có luật
-#: nào đọc con số này. Nó chỉ quyết định chỗ nào in thêm một biểu tượng ⚠️.
-DANG_CHU_Y: Final = 3
 
 USAGE = (
     "📥 CÁCH DÙNG\n"
@@ -57,49 +53,6 @@ USAGE = (
     "👉 Lệnh này chỉ ĐỌC. Nó không chặn ai và không chấm điểm ai — lớp luật chống gian\n"
     "lận cố ý chưa bật cho tới khi có đủ số liệu đo."
 )
-
-#: Tín hiệu của MỘT người, kèm số tài khoản dùng chung lấy sẵn từ `signal_owners`.
-_SQL_BY_USER = """
-SELECT s.signal_type,
-       s.signal_value,
-       s.hits,
-       s.first_seen,
-       s.last_seen,
-       coalesce(o.user_count, 1) AS so_tai_khoan
-  FROM identity_signals s
-  LEFT JOIN signal_owners o
-         ON o.signal_type = s.signal_type AND o.signal_value = s.signal_value
- WHERE s.user_id = :uid
- ORDER BY so_tai_khoan DESC, s.last_seen DESC
- LIMIT :lim
-"""
-
-#: Các tài khoản từng mang một giá trị tín hiệu.
-_SQL_BY_VALUE = """
-SELECT s.user_id, s.hits, s.first_seen, s.last_seen,
-       (u.verified_at IS NOT NULL) AS da_xac_minh,
-       (b.user_id IS NOT NULL)     AS dang_khoa
-  FROM identity_signals s
-  LEFT JOIN users u ON u.user_id = s.user_id
-  LEFT JOIN user_bans b ON b.user_id = s.user_id AND b.unbanned_at IS NULL
- WHERE s.signal_type = :loai AND s.signal_value = :gia_tri
- ORDER BY s.last_seen DESC
- LIMIT :lim
-"""
-
-_SQL_OWNER = """
-SELECT user_count, first_user_id, last_seen
-  FROM signal_owners WHERE signal_type = :loai AND signal_value = :gia_tri
-"""
-
-#: Lượt xác minh gần nhất của một người — nguồn duy nhất hiện có cho ASN / quốc gia.
-_SQL_EVENTS = """
-SELECT event_type, host(ip) AS ip, asn, country, verdict, risk_score, created_at
-  FROM verification_events
- WHERE user_id = :uid
- ORDER BY created_at DESC
- LIMIT 5
-"""
 
 
 def _sender(context: ContextTypes.DEFAULT_TYPE) -> Any:
@@ -117,36 +70,6 @@ def _args(context: ContextTypes.DEFAULT_TYPE) -> list[str]:
 
 def _moment(value: Any) -> str:
     return "—" if value is None else value.astimezone(VN_TZ).strftime("%H:%M %d/%m/%Y")
-
-
-def parse_ip(raw: str) -> str | None:
-    """Chuỗi có phải một địa chỉ IP không. Trả về **dạng chuẩn hoá**, hoặc `None`.
-
-    Chuẩn hoá là bắt buộc chứ không phải làm đẹp: `identity_signals.signal_value` lưu
-    chuỗi do `ipaddress` sinh ra, nên gõ `2405:4802:0:0::1` mà so thẳng sẽ không khớp
-    dòng lưu dưới dạng `2405:4802::1`.
-    """
-    try:
-        return str(ipaddress.ip_address(raw.strip()))
-    except ValueError:
-        return None
-
-
-def rut_gon_ip(value: str) -> str:
-    """Che phần cuối địa chỉ. Đủ để đối chiếu hai lượt tra, không đủ để dán đi nơi khác."""
-    try:
-        addr = ipaddress.ip_address(value)
-    except ValueError:
-        return value
-    if isinstance(addr, ipaddress.IPv4Address):
-        phan = value.split(".")
-        return ".".join(phan[:3] + ["x"])
-    phan = value.split(":")
-    return ":".join(phan[:4] + ["…"])
-
-
-def _nhan(signal_type: str, signal_value: str) -> str:
-    return rut_gon_ip(signal_value) if signal_type == "ip" else signal_value
 
 
 @admin_command(CMD, mutates=False)
@@ -179,8 +102,8 @@ async def cmd_checkip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def _tra_theo_nguoi(user_id: int) -> str:
     async with session() as db:
-        signals = (await db.execute(text(_SQL_BY_USER), {"uid": user_id, "lim": LIMIT})).all()
-        events = (await db.execute(text(_SQL_EVENTS), {"uid": user_id})).all()
+        signals = await identity_admin.tin_hieu_cua_nguoi(db, user_id, limit=LIMIT)
+        events = await identity_admin.luot_xac_minh(db, user_id)
 
     lines = [f"🔎 TÍN HIỆU ĐỊNH DANH — {user_id}", ""]
 
@@ -209,7 +132,8 @@ async def _tra_theo_nguoi(user_id: int) -> str:
             quoc_gia = e.country or "—"
             lines.append(
                 f"• {_moment(e.created_at)} · {e.verdict} · ASN {asn} · {quoc_gia}"
-                f" · IP {rut_gon_ip(e.ip) if e.ip else '—'}"
+                # `e.ip` ĐÃ được service rút gọn — không rút gọn lần thứ hai ở đây.
+                f" · IP {e.ip or '—'}"
             )
 
     lines += ["", _chan_trang(), f"👉 Hồ sơ đầy đủ: /user {user_id}"]
@@ -218,12 +142,10 @@ async def _tra_theo_nguoi(user_id: int) -> str:
 
 async def _tra_theo_gia_tri(*, loai: str, gia_tri: str) -> str:
     async with session() as db:
-        owner = (
-            await db.execute(text(_SQL_OWNER), {"loai": loai, "gia_tri": gia_tri})
-        ).one_or_none()
-        rows = (
-            await db.execute(text(_SQL_BY_VALUE), {"loai": loai, "gia_tri": gia_tri, "lim": LIMIT})
-        ).all()
+        owner = await identity_admin.chu_tin_hieu(db, loai=loai, gia_tri=gia_tri)
+        rows = await identity_admin.tai_khoan_theo_tin_hieu(
+            db, loai=loai, gia_tri=gia_tri, limit=LIMIT
+        )
 
     hien = rut_gon_ip(gia_tri) if loai == "ip" else gia_tri
     if not rows:

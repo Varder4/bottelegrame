@@ -625,6 +625,10 @@ async def resume_running_jobs() -> list[int]:
 
 
 __all__ = [
+    "AUDIENCE_LABEL",
+    "JOB_STATE_LABEL",
+    "DongDot",
+    "list_jobs",
     "ACTIVE_WINDOW_DAYS",
     "AUDIENCES",
     "KINDS",
@@ -648,3 +652,86 @@ __all__ = [
     "start_pump",
     "status",
 ]
+
+
+# ── Danh sách đợt, cho màn hình quản trị ────────────────────────────
+#
+# `status(job_id)` trả lời "đợt này đang ra sao". Không có hàm nào trả lời "có những đợt
+# nào" — trên Telegram không cần, vì admin vừa tạo đợt nào thì nhớ số đợt đó. Trên web thì
+# đó là câu hỏi đầu tiên của màn hình.
+
+
+#: Nhãn tiếng Việt của tệp người nhận. Ở cạnh dữ liệu chứ không ở template: hai màn hình
+#: cùng đọc `audience` mà mỗi nơi tự dịch là hai bản dịch sẽ lệch nhau.
+AUDIENCE_LABEL: Final[dict[str, str]] = {
+    "active_30d": f"hoạt động {ACTIVE_WINDOW_DAYS} ngày gần đây",
+    "all": "TOÀN BỘ người đã /start",
+    "custom": "danh sách chỉ định",
+}
+
+JOB_STATE_LABEL: Final[dict[str, str]] = {
+    "draft": "nháp, chờ xác nhận",
+    "running": "đang chạy",
+    "paused": "đang tạm dừng",
+    "done": "đã xong",
+    "cancelled": "đã huỷ",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class DongDot:
+    job_id: int
+    kind: str
+    audience: str
+    state: str
+    total: int
+    sent: int
+    failed: int
+    created_by: int
+    created_at: datetime
+    finished_at: datetime | None
+
+    @property
+    def dang_chay(self) -> bool:
+        return self.state == "running"
+
+    @property
+    def huy_duoc(self) -> bool:
+        """Chỉ đợt chưa kết thúc mới huỷ được — cùng luật với `cancel()`."""
+        return self.state in {"draft", "running", "paused"}
+
+
+_SQL_JOBS = """
+SELECT job_id, kind, audience, state, total, sent, failed, created_by,
+       created_at, finished_at
+  FROM broadcast_jobs
+ WHERE (CAST(:cursor AS int) IS NULL OR job_id < CAST(:cursor AS int))
+ ORDER BY job_id DESC
+ LIMIT :lim
+"""
+
+
+async def list_jobs(
+    db: AsyncSession, *, cursor: int | None = None, limit: int = 30
+) -> list[DongDot]:
+    """Các đợt gần nhất, mới nhất trước. `cursor` là `job_id` của dòng cuối trang trước.
+
+    Phân trang keyset chứ không OFFSET: `job_id` tăng đơn điệu nên nó vừa là con trỏ vừa
+    là thứ tự, và không có dòng nào bị nhảy khi có đợt mới chen vào giữa hai lần bấm.
+    """
+    rows = (await db.execute(text(_SQL_JOBS), {"cursor": cursor, "lim": limit})).all()
+    return [
+        DongDot(
+            job_id=r.job_id,
+            kind=r.kind,
+            audience=r.audience,
+            state=r.state,
+            total=r.total,
+            sent=r.sent,
+            failed=r.failed,
+            created_by=r.created_by,
+            created_at=r.created_at,
+            finished_at=r.finished_at,
+        )
+        for r in rows
+    ]

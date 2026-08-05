@@ -28,8 +28,6 @@ Bốn điều chi phối cả file:
 
 from __future__ import annotations
 
-import json
-import re
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Final
@@ -49,6 +47,18 @@ from televip.services import code_issuance, settings_service, text_service
 from televip.services import stats as stats_service
 from televip.services import users as users_service
 
+# Nhập lại dưới TÊN CŨ: đây từng là mã của file này, và cả `/cauhinh` lẫn các bài kiểm
+# đang gọi qua tên đó. Quyền sở hữu đã chuyển sang service; tên gọi thì giữ.
+from televip.services.settings_service import (
+    MASKED,
+    TYPE_HINTS,
+    SensitiveSettingLocked,
+    ValueParseError,
+    is_secret,
+    parse_setting_value,
+    render_value,
+)
+
 # `resolve_user` nhập lại dưới tên cũ: hai handler khác (`identity.py`, `share_event.py`)
 # đang nhập nó TỪ FILE NÀY. Đổi đường nhập của chúng là việc riêng, không lẫn vào đây.
 from televip.services.users import resolve_user
@@ -62,35 +72,6 @@ MAX_MESSAGE_CHARS: Final = 3_500
 #: Số grant hiển thị trong `/user`. Hồ sơ đầy đủ là việc của truy vấn, không phải của một
 #: tin nhắn — in hết là vừa vô dụng vừa vượt giới hạn Telegram.
 USER_GRANT_LIMIT: Final = 10
-
-#: Khoá có tên khớp một trong các mẫu này thì **giá trị bị che** trong `/cauhinh`.
-#: Bảng `settings` hiện chưa có khoá nào như vậy (bí mật nằm ở biến môi trường, không nằm
-#: trong DB) — mẫu ở đây là hàng rào cho ngày mai, để một khoá `*.token` thêm vào sau này
-#: không lặng lẽ hiện nguyên văn trong một tin nhắn Telegram.
-SECRET_KEY_PATTERNS: Final[tuple[str, ...]] = (
-    "token",
-    "secret",
-    "password",
-    "passwd",
-    "api_key",
-    "private",
-    "pepper",
-    "hmac",
-)
-
-MASKED: Final = "••• (đã che)"
-
-#: Tên kiểu cho người đọc. Dùng ở thông báo từ chối của `/setcauhinh`, nên phải nói được
-#: **cách gõ đúng**, không chỉ tên kiểu.
-TYPE_HINTS: Final[dict[str, str]] = {
-    "int": "số nguyên (ví dụ: 30)",
-    "money_vnd": "số tiền VNĐ nguyên (ví dụ: 10000 hoặc 10.000)",
-    "bp": "điểm cơ bản, 100 bp = 1% (ví dụ: 250)",
-    "seconds": "số giây (ví dụ: 60)",
-    "bool": "true hoặc false",
-    "string": "chuỗi văn bản",
-    "json": 'JSON hợp lệ (ví dụ: [10000, 20000] hoặc {"a": 1})',
-}
 
 #: Cú pháp hiển thị trong `/help_admin`. Đây là **bảng trang trí**, không phải nguồn
 #: quyền: lệnh nào được liệt kê do `admin_permissions` quyết định, bảng này chỉ thêm cú
@@ -130,28 +111,6 @@ COMMAND_SYNTAX: Final[dict[str, str]] = {
     "/suanoidung": "/suanoidung <khoá> <nội dung> — sửa một tin nhắn",
     "/resetnoidung": "/resetnoidung <khoá> — về bản mặc định",
 }
-
-#: `12.000.000` → 12000000. Chỉ khớp khi MỌI nhóm sau dấu chấm đúng ba chữ số, nên `1.5`
-#: KHÔNG lọt qua và không có cách nào để một số thập phân bị đọc nhầm thành hàng triệu.
-_VN_THOUSANDS = re.compile(r"^-?\d{1,3}(\.\d{3})+$")
-
-_TRUE_WORDS: Final[frozenset[str]] = frozenset({"true", "1", "on", "yes", "bat", "bật"})
-_FALSE_WORDS: Final[frozenset[str]] = frozenset({"false", "0", "off", "no", "tat", "tắt"})
-
-_INT_TYPES: Final[frozenset[str]] = frozenset({"int", "money_vnd", "bp", "seconds"})
-
-
-class ValueParseError(ValueError):
-    """Giá trị admin gõ không hợp với `value_type` của khoá.
-
-    Mang theo ``expected`` để tầng handler in ra **kiểu mong đợi**, không phải một câu
-    "giá trị không hợp lệ" mà admin phải tự đoán.
-    """
-
-    def __init__(self, expected: str) -> None:
-        self.expected = expected
-        super().__init__(expected)
-
 
 # ── Tiện ích chung ──────────────────────────────────────────────────
 
@@ -235,39 +194,6 @@ def _vn_time(moment: datetime | None) -> str:
 
 # ── /cauhinh ────────────────────────────────────────────────────────
 
-_SQL_SETTINGS_LIST = """
-SELECT key, value, value_type, label_vi, sensitive
-  FROM settings
- WHERE CAST(:prefix AS text) = '' OR key LIKE CAST(:pattern AS text)
- ORDER BY key
-"""
-
-
-def _is_secret(key: str) -> bool:
-    lowered = key.lower()
-    return any(pattern in lowered for pattern in SECRET_KEY_PATTERNS)
-
-
-def render_value(value: Any, value_type: str, *, full: bool = False) -> str:
-    """Giá trị JSONB → chuỗi cho admin đọc.
-
-    Chỉ `money_vnd` được nhóm hàng nghìn: nhóm cả `seconds` thì `3.600` trông như một số
-    tiền, và đó đúng là kiểu nhầm lẫn mà quy ước hiển thị sinh ra để tránh.
-    """
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if value_type == "money_vnd" and isinstance(value, int):
-        return f"{texts.format_vnd(value)}đ"
-    if isinstance(value, str):
-        return value or "(rỗng)"
-    if isinstance(value, int | float):
-        return str(value)
-
-    blob = json.dumps(value, ensure_ascii=False, separators=(",", ": "))
-    if full or len(blob) <= 160:
-        return blob
-    return f"{blob[:157]}…"
-
 
 @admin_command("/cauhinh")
 async def cmd_cauhinh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -280,9 +206,7 @@ async def cmd_cauhinh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     prefix = args[0].strip() if args else ""
 
     async with session() as db:
-        rows = (
-            await db.execute(text(_SQL_SETTINGS_LIST), {"prefix": prefix, "pattern": f"{prefix}%"})
-        ).all()
+        rows = await settings_service.list_settings(db, prefix=prefix)
 
     header = "🔧 CẤU HÌNH ĐANG CHẠY" + (f" — lọc `{prefix}`" if prefix else "")
 
@@ -300,9 +224,7 @@ async def cmd_cauhinh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     lines: list[str] = []
     for row in rows:
         badge = " 🔒" if row.sensitive else ""
-        shown = (
-            MASKED if _is_secret(row.key) else render_value(row.value, row.value_type, full=full)
-        )
+        shown = MASKED if is_secret(row.key) else render_value(row.value, row.value_type, full=full)
         lines.append(f"• {row.key} [{row.value_type}]{badge}\n  {row.label_vi}\n  = {shown}")
 
     await _reply_lines(
@@ -319,54 +241,6 @@ async def cmd_cauhinh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 # ── /setcauhinh ─────────────────────────────────────────────────────
-
-_SQL_SETTING_ROW = """
-SELECT key, value, value_type, label_vi, sensitive
-  FROM settings
- WHERE key = :key
-"""
-
-
-def parse_setting_value(raw: str, value_type: str) -> Any:
-    """Chuỗi admin gõ → giá trị Python đúng `value_type` của khoá.
-
-    Ném:
-        ValueParseError: gõ sai kiểu. `expected` là hướng dẫn gõ đúng.
-    """
-    hint = TYPE_HINTS.get(value_type, value_type)
-    cleaned = raw.strip()
-
-    if value_type in _INT_TYPES:
-        candidate = cleaned.replace("_", "")
-        if _VN_THOUSANDS.match(candidate):
-            candidate = candidate.replace(".", "")
-        if not re.fullmatch(r"-?\d+", candidate):
-            raise ValueParseError(hint)
-        return int(candidate)
-
-    if value_type == "bool":
-        lowered = cleaned.lower()
-        if lowered in _TRUE_WORDS:
-            return True
-        if lowered in _FALSE_WORDS:
-            return False
-        raise ValueParseError(hint)
-
-    if value_type == "json":
-        try:
-            parsed = json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            raise ValueParseError(hint) from exc
-        if not isinstance(parsed, dict | list):
-            # `settings_service._TYPE_FAMILIES` chỉ nhận dict/list cho `json`. Chặn ở đây
-            # để thông báo nói được kiểu mong đợi thay vì ném ConfigError chung chung.
-            raise ValueParseError(hint)
-        return parsed
-
-    if value_type == "string":
-        return cleaned
-
-    raise ValueParseError(hint)
 
 
 @admin_command("/setcauhinh")
@@ -392,7 +266,7 @@ async def cmd_setcauhinh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     actor = _actor_id(update)
 
     async with session() as db:
-        row = (await db.execute(text(_SQL_SETTING_ROW), {"key": key})).one_or_none()
+        row = await settings_service.get_setting(db, key)
 
     if row is None:
         await _reply(
@@ -431,16 +305,15 @@ async def cmd_setcauhinh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # `settings_service.set` ghi `settings` + `settings_audit`, kiểm min/max, và
             # xoá cache của tiến trình này. Ghi `audit_log` trong CÙNG giao dịch để không
             # có đường nào đổi cấu hình mà thiếu một trong hai cuốn sổ.
-            await settings_service.set(key, parsed, updated_by=actor, db=db)
-            await admin_service.write_audit(
-                db,
-                actor_id=actor,
-                action="setcauhinh",
-                entity_type="settings",
-                entity_id=key,
-                before={"value": row.value},
-                after={"value": parsed},
-            )
+            await settings_service.set_by_admin(db, key, parsed, actor_id=actor, ip=None)
+    except SensitiveSettingLocked:
+        await _reply(
+            update,
+            context,
+            f"🔒 Khoá `{key}` cần **duyệt hai người** (§13.4.1) — chưa đổi được bằng lệnh.\n\n"
+            f"📌 Giá trị hiện tại: {old_render}",
+        )
+        return
     except ConfigError as exc:
         await _reply(
             update,
