@@ -20,12 +20,10 @@ và `cskh` chạy được `/stats`. Cái `cskh` không được xem là **bản
 
 from __future__ import annotations
 
-from typing import Annotated
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, Response
-
-from televip.apps.adminweb.deps import NguoiDung, phien_hien_tai
+from televip.apps.adminweb.deps import phien_hien_tai
 from televip.apps.adminweb.menu import dung_menu
 from televip.db.engine import session, transaction
 from televip.services import admin as admin_service
@@ -36,15 +34,26 @@ router = APIRouter()
 
 
 @router.get("/", response_class=HTMLResponse)
-async def bang_dieu_khien(
-    request: Request, nguoi: Annotated[NguoiDung, Depends(phien_hien_tai)]
-) -> Response:
-    """Trang chủ panel.
+async def bang_dieu_khien(request: Request) -> Response:
+    """Trang chủ panel. **Chưa đăng nhập thì chuyển sang trang đăng nhập, không trả 404.**
+
+    Mọi đường dẫn khác vẫn 404 khi chưa có phiên — đó là tư thế của panel. Nhưng đường dẫn
+    GỐC là ngoại lệ có lý do: `/dangnhap` vốn đã mở công khai và trả 200 kèm một form đăng
+    nhập, nên một cái 404 ở `/` **không che được gì** với người dò (họ thử `/dangnhap` là
+    ra), mà lại chặn đúng người có quyền vào — họ gõ tên miền, nhận `{"detail":"Not Found"}`
+    và không có gì trên màn hình nói phải đi đâu tiếp.
 
     Menu sinh từ `admin_permissions` — cùng nguồn với `/help_admin` của bot. Người vai trò
     `cskh` không **nhìn thấy** mục "Kho code" vì bảng không có hàng đó, chứ không phải vì
     giao diện ẩn nó đi.
     """
+    try:
+        nguoi = await phien_hien_tai(request)
+    except HTTPException:
+        # Gồm cả phiên chết và người vừa bị thu hồi quyền: cả hai đều nên thấy trang đăng
+        # nhập chứ không phải một ngõ cụt.
+        return RedirectResponse("/dangnhap", status_code=303)
+
     async with session() as db:
         menu = await dung_menu(db, user_id=nguoi.user_id, role=nguoi.role, duong_hien_tai="/")
         xem_stats = await admin_service.can_run(db, nguoi.user_id, "/stats")

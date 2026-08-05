@@ -79,10 +79,28 @@ async def _dang_nhap(
 
 @pytest.mark.asyncio
 async def test_chua_dang_nhap_nhan_404_khong_phai_401(app_client: httpx.AsyncClient):
-    """404 để máy quét không phân biệt được panel với một tên miền trống."""
+    """404 để máy quét không phân biệt được panel với một tên miền trống.
+
+    Thử trên các đường dẫn NỘI DUNG. Đường dẫn gốc là ngoại lệ có chủ ý — xem bài kiểm
+    ngay bên dưới.
+    """
+    for duong in ("/kho", "/nguoidung", "/cauhinh", "/nhatky", "/bantin"):
+        r = await app_client.get(duong)
+        assert r.status_code == 404, duong
+        assert "www-authenticate" not in r.headers, duong
+
+
+@pytest.mark.asyncio
+async def test_duong_dan_GOC_chuyen_sang_trang_dang_nhap(app_client: httpx.AsyncClient):
+    """Cửa trước của panel không được là một ngõ cụt.
+
+    Một cái 404 ở `/` **không che được gì**: `/dangnhap` vốn đã mở công khai và trả 200 kèm
+    form đăng nhập, nên người dò thử một lần là ra. Cái nó chặn được là đúng người có quyền
+    vào — họ gõ tên miền, nhận `{"detail":"Not Found"}`, và không có gì nói phải đi đâu tiếp.
+    """
     r = await app_client.get("/")
-    assert r.status_code == 404
-    assert "www-authenticate" not in r.headers
+    assert r.status_code == 303
+    assert r.headers["location"] == "/dangnhap"
 
 
 @pytest.mark.asyncio
@@ -168,7 +186,9 @@ async def test_dang_nhap_hong_thi_khong_dat_cookie(app_client: httpx.AsyncClient
     await _dung_admin()
     r = await _dang_nhap(app_client, mk="saibet123456")
     assert "set-cookie" not in r.headers
-    assert (await app_client.get("/")).status_code == 404
+    # Không có phiên ⇒ đường dẫn gốc đẩy về trang đăng nhập, và đường dẫn nội dung 404.
+    assert (await app_client.get("/")).headers["location"] == "/dangnhap"
+    assert (await app_client.get("/kho")).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -198,11 +218,11 @@ async def test_cookie_be_sang_may_khac_giet_phien(app_client: httpx.AsyncClient)
     assert (await app_client.get("/")).status_code == 200
 
     # Cùng cookie, User-Agent khác.
-    lech = await app_client.get("/", headers={"user-agent": "May-Khac/1.0"})
+    lech = await app_client.get("/kho", headers={"user-agent": "May-Khac/1.0"})
     assert lech.status_code == 404
 
     # ...và chủ thật cũng mất phiên: cookie bị trộm thì để sống thêm giây nào cũng là quá lâu.
-    assert (await app_client.get("/")).status_code == 404
+    assert (await app_client.get("/kho")).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -217,7 +237,7 @@ async def test_thu_hoi_quyen_giet_phien_web_ngay_lap_tuc(app_client: httpx.Async
     await run_sql("UPDATE admin_users SET revoked_at = now() WHERE user_id = :u", {"u": OWNER_ID})
     admin_service.invalidate_role(OWNER_ID)
 
-    assert (await app_client.get("/")).status_code == 404
+    assert (await app_client.get("/kho")).status_code == 404
     # Phiên phải bị GIẾT, không chỉ bị từ chối lượt này.
     assert await scalar("SELECT revoked_at FROM admin_sessions") is not None
 
@@ -237,7 +257,9 @@ async def test_dang_xuat_giet_phien(app_client: httpx.AsyncClient):
 
     r = await app_client.post("/dangxuat")
     assert r.status_code == 303
-    assert (await app_client.get("/")).status_code == 404
+    assert (await app_client.get("/kho")).status_code == 404
+    # Và cửa trước đẩy về trang đăng nhập thay vì im lặng.
+    assert (await app_client.get("/")).headers["location"] == "/dangnhap"
 
 
 # ── Chặn dò mật khẩu ────────────────────────────────────────────────
