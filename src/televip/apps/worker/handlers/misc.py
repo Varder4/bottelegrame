@@ -42,6 +42,8 @@ log = get_logger(__name__)
 
 LINK_SUPPORT_KEY: Final = "link.support"
 LINK_GAME_KEY: Final = "link.game_bot"
+#: Link màn "XEM SHOW FULL". Khoá mới, do migration 0017 seed.
+LINK_SHOW_FULL_KEY: Final = "link.show_full"
 LINK_SHARE_KEY: Final = "link.share_url"
 #: Link nhóm cộng đồng in trong nội dung mặc định của `📢 EVENT`. Khoá này §13.6.8 chưa
 #: liệt kê, nhưng caption mẫu ở §13.2.10 có dòng "📱 Group Cộng Đồng: <link group>" — nên
@@ -57,6 +59,7 @@ DEFAULT_COOLDOWNS: Final[dict[str, float]] = {
     "leaderboard": 5.0,
     "support": 3.0,
     "play_game": 2.0,
+    "show_full": 2.0,
     "share_event": 3.0,
 }
 
@@ -261,6 +264,29 @@ async def handle_play_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
+# ── 🔞 XEM SHOW FULL ────────────────────────────────────────────────
+
+
+async def handle_show_full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cùng khuôn với `🎮 Chơi Game`: một màn chữ + một nút link đọc từ `settings`.
+
+    Link nằm ở `link.show_full` chứ không viết cứng — đổi link là việc vận hành làm trên
+    panel, không phải việc phải sửa mã và triển khai lại.
+    """
+    screen = await _enter(update, context, "show_full")
+    if screen is None:
+        return
+
+    show_link = await settings_service.get_str(LINK_SHOW_FULL_KEY, "")
+    if not show_link:
+        log.error("thieu_cau_hinh", key=LINK_SHOW_FULL_KEY)
+    await screen.sender.send_message(
+        screen.chat_id,
+        await text_service.render("show.full"),
+        reply_markup=keyboards.show_full_keyboard(show_link) if show_link else None,
+    )
+
+
 # ── 📢 EVENT (§13.2.10) ─────────────────────────────────────────────
 
 _SQL_SHARE_EVENT = """
@@ -330,6 +356,7 @@ def _bot_link(context: ContextTypes.DEFAULT_TYPE) -> str:
 __all__ = [
     "DEFAULT_COOLDOWNS",
     "LINK_GAME_KEY",
+    "LINK_SHOW_FULL_KEY",
     "LINK_GROUP_KEY",
     "LINK_SHARE_KEY",
     "LINK_SUPPORT_KEY",
@@ -339,6 +366,7 @@ __all__ = [
     "handle_leaderboard_today",
     "handle_noop",
     "handle_play_game",
+    "handle_show_full",
     "handle_share_event",
     "handle_stats",
     "handle_support",

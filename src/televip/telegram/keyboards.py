@@ -51,24 +51,16 @@ BTN_BXH = "👑 BXH"
 BTN_CHECK_CHIA_SE = "📈Check Chia sẻ"
 BTN_THONG_KE_TK = "📊Thống Kê TK"
 BTN_HO_TRO = "💁‍♀️ Hỗ Trợ – CSKH"
-
-#: 10 nút / 5 hàng, đúng thứ tự bảng §13.3.1. Đây là nguồn duy nhất của bố cục —
-#: `main_keyboard()` và `ROUTE_TABLE` đều dẫn xuất từ nó nên không thể lệch nhau.
-MAIN_KEYBOARD_LAYOUT: tuple[tuple[str, str], ...] = (
-    (BTN_PLAY_GAME, BTN_CODE_TAN_THU),
-    (BTN_MOI_BAN, BTN_EVENT),
-    (BTN_DIEM_DANH, BTN_DOI_CODE),
-    (BTN_BXH, BTN_CHECK_CHIA_SE),
-    (BTN_THONG_KE_TK, BTN_HO_TRO),
-)
+BTN_SHOW_FULL = "XEM SHOW FULL 🔞"
 
 #: Nhãn → tên handler. Tên handler trùng hậu tố khoá cooldown ở §13.6.6
 #: (`cooldown.tan_thu`, `cooldown.check_share`…) để router lấy được cả hai từ một lần tra.
-ROUTE_TABLE: dict[str, str] = {
+_ROUTE_DAY_DU: dict[str, str] = {
     BTN_PLAY_GAME: "play_game",
     BTN_CODE_TAN_THU: "tan_thu",
     BTN_MOI_BAN: "moi_ban",
     BTN_EVENT: "share_event",
+    BTN_SHOW_FULL: "show_full",
     BTN_DIEM_DANH: "checkin",
     BTN_DOI_CODE: "redeem_code",
     BTN_BXH: "leaderboard",
@@ -76,6 +68,43 @@ ROUTE_TABLE: dict[str, str] = {
     BTN_THONG_KE_TK: "stats",
     BTN_HO_TRO: "support",
 }
+
+#: Thứ tự các nút, trước khi lọc. Xếp hai nút một hàng.
+_THU_TU: tuple[str, ...] = (
+    BTN_PLAY_GAME,
+    BTN_CODE_TAN_THU,
+    BTN_MOI_BAN,
+    BTN_EVENT,
+    BTN_SHOW_FULL,
+    BTN_DIEM_DANH,
+    BTN_DOI_CODE,
+    BTN_BXH,
+    BTN_CHECK_CHIA_SE,
+    BTN_THONG_KE_TK,
+    BTN_HO_TRO,
+)
+
+#: Nút TẠM ẨN. Bỏ một nhãn khỏi tập này là hiện nó lại — handler và cooldown vẫn còn
+#: nguyên, không phải dựng lại gì.
+#:
+#: Ẩn ở đây gỡ nút khỏi CẢ bàn phím LẪN bảng tra: bàn phím Telegram nằm lại trên máy người
+#: dùng cho tới lần `/start` sau, nên nếu chỉ gỡ khỏi bàn phím thì người đang có nút cũ vẫn
+#: bấm được — tức là "ẩn" mà vẫn chạy.
+AN_TAM_THOI: frozenset[str] = frozenset({BTN_DIEM_DANH, BTN_DOI_CODE})
+
+
+def _xep_hang(nhan: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    """Gấp danh sách nhãn thành các hàng hai nút; hàng cuối có thể chỉ một nút."""
+    return tuple(tuple(nhan[i : i + 2]) for i in range(0, len(nhan), 2))
+
+
+_HIEN: tuple[str, ...] = tuple(n for n in _THU_TU if n not in AN_TAM_THOI)
+
+#: Nguồn duy nhất của bố cục — `main_keyboard()` và `ROUTE_TABLE` đều dẫn xuất từ nó nên
+#: không thể lệch nhau.
+MAIN_KEYBOARD_LAYOUT: tuple[tuple[str, ...], ...] = _xep_hang(_HIEN)
+
+ROUTE_TABLE: dict[str, str] = {n: _ROUTE_DAY_DU[n] for n in _HIEN}
 
 
 def main_keyboard() -> ReplyKeyboardMarkup:
@@ -107,6 +136,7 @@ BTN_OPEN_BOX = "🎁 Đập Hộp 🎁"
 BTN_LB_TODAY = "📅 Hôm nay"
 BTN_LB_ALLTIME = "👑 Toàn thời gian"
 BTN_ENTER_CODE = "🎁 Nhập CODE Tại Đây 💸"
+BTN_SHOW_FULL_CTA = "🔞 XEM NGAY 🔞"
 BTN_SHARE_NOW = "📤 Chia Sẻ Ngay"
 BTN_SHARED_CONTACT_CSKH = "✅ Đã Chia Sẻ - Liên Hệ CSKH"
 
@@ -213,6 +243,10 @@ def leaderboard_keyboard(*, today: bool) -> InlineKeyboardMarkup:
 
 def play_game_keyboard(game_link: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton(BTN_PLAY_GAME, url=game_link)]])
+
+
+def show_full_keyboard(show_link: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(BTN_SHOW_FULL_CTA, url=show_link)]])
 
 
 def enter_code_keyboard(game_link: str) -> InlineKeyboardMarkup:

@@ -57,9 +57,22 @@ def _of_type(app: FakeApp, kind: type) -> list[Any]:
 # ── Bảng định tuyến ─────────────────────────────────────────────────
 
 
-def test_bang_route_phu_dung_tap_route_cua_keyboards() -> None:
-    """Thừa hay thiếu một dòng đều là một nút chết hoặc một handler không ai gọi."""
-    assert set(main.ROUTE_HANDLERS) == set(keyboards.ROUTE_TABLE.values())
+def test_moi_nut_tren_ban_phim_deu_co_handler() -> None:
+    """Thiếu một dòng là một nút chết: bấm vào không có gì xảy ra."""
+    assert set(keyboards.ROUTE_TABLE.values()) <= set(main.ROUTE_HANDLERS)
+
+
+def test_nut_tam_an_van_giu_duong_di_de_bat_lai() -> None:
+    """Nút trong `AN_TAM_THOI` biến khỏi bàn phím NHƯNG dòng handler ở lại.
+
+    Giữ dòng thì hiện lại một nút chỉ là bỏ nhãn khỏi tập ẩn. Xoá dòng thì lần bật lại là
+    một cuộc truy tìm xem handler nào từng phục vụ nút đó.
+    """
+    for nhan in keyboards.AN_TAM_THOI:
+        assert nhan not in keyboards.ROUTE_TABLE, f"{nhan} vẫn còn trên bàn phím"
+        assert keyboards._ROUTE_DAY_DU[nhan] in main.ROUTE_HANDLERS, (
+            f"đường đi của {nhan} đã bị xoá — bật lại sẽ phải dựng lại"
+        )
 
 
 def test_moi_nhan_nut_co_dung_mot_message_handler_khop_tuyet_doi(wired_app: FakeApp) -> None:

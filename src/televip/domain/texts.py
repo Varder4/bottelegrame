@@ -897,6 +897,10 @@ def play_game() -> str:
     return "🎮 Chơi Game 🎮\n\nBấm nút bên dưới để chơi ngay!"
 
 
+def show_full() -> str:
+    return "🔞 XEM SHOW FULL 🔞\n\nBấm nút bên dưới để xem ngay!"
+
+
 # ── 13.2.13 · /help ─────────────────────────────────────────────────
 
 

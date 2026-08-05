@@ -96,13 +96,16 @@ ADMIN_COMMANDS: list[tuple[str, Handler]] = [
     *admin_event.COMMANDS,
 ]
 
-#: Nhãn nút ReplyKeyboard → handler, khoá theo tên route của `keyboards.ROUTE_TABLE`.
-#: Bảng phải phủ **đúng** tập route đó (có test giữ hai bên không lệch nhau).
+#: Tên route → handler. Bảng này phủ **mọi** route, kể cả những nút đang tạm ẩn
+#: (`keyboards.AN_TAM_THOI`) — giữ dòng ở đây thì hiện lại một nút chỉ là bỏ nhãn khỏi tập
+#: ẩn, không phải dựng lại đường đi. Router chỉ đăng ký cho nhãn CÓ trên bàn phím, nên nút
+#: ẩn không có handler nào lắng nghe.
 ROUTE_HANDLERS: dict[str, str] = {
     "play_game": f"{_HANDLERS_PKG}.misc:handle_play_game",
     "tan_thu": f"{_HANDLERS_PKG}.tanthu:handle_tanthu",
     "moi_ban": f"{_HANDLERS_PKG}.referral:handle_moi_ban",
     "share_event": f"{_HANDLERS_PKG}.misc:handle_share_event",
+    "show_full": f"{_HANDLERS_PKG}.misc:handle_show_full",
     "checkin": f"{_HANDLERS_PKG}.checkin:handle_checkin",
     # Nút này chỉ mở MÀN HÌNH đổi code; lượt đổi thật đi qua callback `redeem_<mệnh giá>`.
     "redeem_code": f"{_HANDLERS_PKG}.checkin:handle_redeem_menu",

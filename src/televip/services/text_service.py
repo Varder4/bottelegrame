@@ -645,6 +645,7 @@ _SPECS: Final[tuple[TemplateSpec, ...]] = (
         support_link="https://t.me/cskh_televip",
     ),
     _spec("game.play", "Màn hình 🎮 Chơi Game", texts.play_game()),
+    _spec("show.full", "Màn hình 🔞 XEM SHOW FULL", texts.show_full()),
     _spec(
         "help.text",
         "Nội dung /help",

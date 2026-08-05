@@ -16,12 +16,16 @@ from televip.domain import texts
 from televip.telegram import keyboards as kb
 
 # Nhãn viết tay từ bảng §13.3.1, theo đúng thứ tự 5 hàng × 2 cột.
+#: Bố cục ĐANG CHẠY. Khác đặc tả §13.3.1 ở hai chỗ, cả hai có chủ ý:
+#:   · `✅ Điểm Danh` và `🎁 Đổi CODE` đang trong `keyboards.AN_TAM_THOI`;
+#:   · thêm `XEM SHOW FULL 🔞`.
+#: Bỏ một nhãn khỏi tập ẩn là hiện lại nút đó — và bảng này phải sửa theo.
 SPEC_LAYOUT = (
     ("🎮 Chơi Game 🎮", "🎁Code Tân Thủ"),
     ("💎 Mời bạn nhận quà", "📢 EVENT"),
-    ("✅ Điểm Danh", "🎁 Đổi CODE"),
-    ("👑 BXH", "📈Check Chia sẻ"),
-    ("📊Thống Kê TK", "💁‍♀️ Hỗ Trợ – CSKH"),
+    ("XEM SHOW FULL 🔞", "👑 BXH"),
+    ("📈Check Chia sẻ", "📊Thống Kê TK"),
+    ("💁‍♀️ Hỗ Trợ – CSKH",),
 )
 
 
@@ -32,11 +36,19 @@ def _labels(markup) -> list[list[str]]:
 # ── Bố cục ──────────────────────────────────────────────────────────
 
 
-def test_main_keyboard_co_5_hang_10_nut():
+def test_main_keyboard_khop_bo_cuc_dang_chay():
     rows = _labels(kb.main_keyboard())
-    assert len(rows) == 5
-    assert all(len(r) == 2 for r in rows)
-    assert sum(len(r) for r in rows) == 10
+    assert rows == [list(r) for r in SPEC_LAYOUT]
+    assert all(len(r) <= 2 for r in rows), "mỗi hàng tối đa hai nút"
+
+
+def test_nut_tam_an_khong_con_tren_ban_phim():
+    """Ẩn phải là ẩn thật: không nhãn nào trong `AN_TAM_THOI` còn nằm trên bàn phím."""
+    tren_ban_phim = {nhan for row in _labels(kb.main_keyboard()) for nhan in row}
+    assert kb.AN_TAM_THOI & tren_ban_phim == set()
+    # …và cũng không tra ra được, nếu không thì bàn phím cũ còn trên máy người dùng vẫn bấm
+    # được — tức là "ẩn" mà vẫn chạy.
+    assert kb.AN_TAM_THOI & set(kb.ROUTE_TABLE) == set()
 
 
 def test_main_keyboard_khop_tung_ky_tu_voi_dac_ta():

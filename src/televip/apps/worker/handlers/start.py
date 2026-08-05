@@ -8,7 +8,9 @@ Bốn việc, theo đúng thứ tự:
 3. Tạo/cập nhật hồ sơ, nhận biết người mới.
 4. Nếu là người mới và có deep link `ref_<id>` thì ghi nhận ý định giới thiệu.
 
-Rồi gửi hai tin: banner chào + banner quà kèm nút mở quà, và gắn bàn phím chính.
+5. **Chưa xác thực thì dừng ở màn xác thực** — không gắn bàn phím chính.
+
+Xác thực xong mới gửi hai tin: banner chào + banner quà kèm nút mở quà, kèm bàn phím.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from televip.apps.worker.handlers import gate
 from televip.cache.antispam import check_cooldown
 from televip.core.errors import RateLimited
 from televip.core.logging import get_logger
@@ -70,6 +73,15 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         is_verified=result.is_verified,
         co_nguoi_gioi_thieu=referrer_id is not None,
     )
+
+    # Chưa xác thực thì DỪNG ở màn xác thực, không gắn bàn phím chính. Cổng chặn vốn nằm
+    # trước từng nút phát quà; đưa nó lên `/start` khiến người mới chỉ nhìn thấy đúng một
+    # việc phải làm, thay vì một bàn phím mười nút mà bấm cái nào cũng ra cùng một câu.
+    #
+    # Dùng lại `gate.require_verified()` chứ không dựng bản sao: cùng câu chữ, cùng nút,
+    # cùng nhánh xử lý khi `webapp.url` chưa cấu hình.
+    if not await gate.require_verified(update, context):
+        return
 
     await sender.send_message(
         chat.id,

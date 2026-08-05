@@ -190,6 +190,7 @@ FUNCTION_TO_KEY: dict[str, str] = {
     "share_event_default": "event.share_default",
     "support": "support.contact",
     "play_game": "game.play",
+    "show_full": "show.full",
     "help_text": "help.text",
     "share_progress": "share.progress",
     "share_status_line": "share.status_waiting",
