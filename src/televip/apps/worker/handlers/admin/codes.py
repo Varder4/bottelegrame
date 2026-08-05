@@ -33,12 +33,10 @@ import json
 import re
 import secrets
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
 
-from sqlalchemy import text, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -48,11 +46,21 @@ from televip.core.clock import VN_TZ
 from televip.core.errors import ConfigError
 from televip.core.logging import get_logger
 from televip.db.engine import session, transaction
-from televip.db.models.codes import CODE_TYPES, Code
+from televip.db.models.codes import CODE_TYPES
 from televip.domain import texts
 from televip.services import code_issuance, settings_service, text_service
+from televip.services import stock as stock_service
 from televip.services.admin import Handler, admin_command, write_audit
-from televip.services.stock import StockRow, read_stock, summarize, warn_threshold
+from televip.services.stock import (
+    StockRow,
+    read_stock,
+    summarize,
+    warn_threshold,
+)
+
+#: Đọc mệnh giá giờ nằm ở `services/stock.py` để panel web dùng chung một cách đọc. Giữ
+#: tên cũ ở đây vì `/del_all_code` bên dưới và các bài kiểm đang gọi qua tên này.
+from televip.services.stock import doc_menh_gia as parse_value_vnd
 from televip.telegram import keyboards
 
 log = get_logger(__name__)
@@ -73,44 +81,7 @@ GRANT_TYPE_TANTHU: Final = "tanthu"
 SAMPLE_LIMIT: Final = 10
 LIST_LIMIT: Final = 20
 
-_VALUE_RE: Final = re.compile(r"^(\d+)([kK])?$")
-
-
 # ── Đọc tham số ─────────────────────────────────────────────────────
-
-
-def parse_value_vnd(raw: str) -> int | None:
-    """`10000` · `10.000` · `10k` · `88K` → số VNĐ. `None` nếu không đọc được.
-
-    Bốn dạng vì §13.4.2 viết `{value_k}k` trong mẫu lệnh còn §13.6.2 viết `10.000` trong
-    bảng mệnh giá — admin sẽ gõ cả hai, và một lần gõ đúng-theo-tài-liệu mà bot từ chối là
-    lý do người ta quay lại sửa thẳng database.
-    """
-    cleaned = raw.replace(".", "").replace(",", "").replace("_", "")
-    matched = _VALUE_RE.match(cleaned)
-    if matched is None:
-        return None
-    value = int(matched.group(1))
-    if matched.group(2):
-        value *= 1_000
-    return value or None
-
-
-def dedupe(raw_codes: Sequence[str]) -> list[str]:
-    """Bỏ khoảng trắng, bỏ token rỗng, bỏ trùng **trong chính lô** — giữ thứ tự gõ vào.
-
-    So khớp phân biệt hoa thường vì `uq_codes_value` cũng vậy: gộp `abc` với `ABC` ở đây
-    sẽ báo "đã bỏ qua vì trùng" cho một mã mà database vẫn nhận.
-    """
-    seen: set[str] = set()
-    result: list[str] = []
-    for token in raw_codes:
-        code = token.strip()
-        if not code or code in seen:
-            continue
-        seen.add(code)
-        result.append(code)
-    return result
 
 
 def _args(context: ContextTypes.DEFAULT_TYPE) -> list[str]:
@@ -154,95 +125,9 @@ DEL_USAGE = "📥 Cách dùng: /del_code MA123"
 RESEND_USAGE = "📥 Cách dùng: /resend_tanthu @username  hoặc  /resend_tanthu 123456789"
 
 
-@dataclass(frozen=True, slots=True)
-class LoadResult:
-    """Kết quả một lần nạp kho.
-
-    ``skipped`` gộp cả hai loại trùng — trùng với kho và trùng ngay trong lô vừa dán — vì
-    admin chỉ cần biết "gõ N mã, vào kho M".
-    """
-
-    #: `None` khi không mã nào vào kho (cả lô đều trùng) — không có lô nào để thu hồi.
-    batch_id: int | None
-    added: int
-    skipped: int
-    samples: list[str]
-    stock_after: int
-
-
-async def load_codes(
-    db: AsyncSession,
-    *,
-    code_type: str,
-    value_vnd: int,
-    code_values: Sequence[str],
-    actor_id: int,
-    extra_skipped: int = 0,
-) -> LoadResult:
-    """Nạp một lô vào kho và ghi `audit_log`. Gọi trong `transaction()`.
-
-    `ON CONFLICT (code_value) DO NOTHING` là toàn bộ cơ chế chống trùng: hỏi trước rồi
-    chèn sau để lại một khe giữa hai câu lệnh, và hai admin dán cùng một danh sách trong
-    khe đó sẽ cùng thấy "chưa có".
-
-    ``extra_skipped`` là số mã đã bị loại vì trùng ngay trong lô, đếm trước khi gọi hàm.
-    """
-    stmt = (
-        pg_insert(Code)
-        .values(
-            [
-                {
-                    "code_value": value,
-                    "code_type": code_type,
-                    "value_vnd": value_vnd,
-                    "created_by": actor_id,
-                }
-                for value in code_values
-            ]
-        )
-        .on_conflict_do_nothing(index_elements=["code_value"])
-        .returning(Code.code_id, Code.code_value)
-    )
-    inserted = (await db.execute(stmt)).all()
-
-    added = len(inserted)
-    skipped = len(code_values) - added + extra_skipped
-
-    # `batch_id` = code_id nhỏ nhất của lô — xem docstring module. Gán ở câu thứ hai vì
-    # giá trị đó chỉ biết được SAU khi `ON CONFLICT` đã lọc xong mã trùng.
-    batch_id = min(row.code_id for row in inserted) if inserted else None
-    if batch_id is not None:
-        await db.execute(
-            update(Code)
-            .where(Code.code_id.in_([row.code_id for row in inserted]))
-            .values(batch_id=batch_id)
-        )
-
-    stock_after = await code_issuance.available_count(db, code_type=code_type, value_vnd=value_vnd)
-
-    await write_audit(
-        db,
-        actor_id=actor_id,
-        action="add_giffcode",
-        entity_type="code_batch",
-        entity_id=None if batch_id is None else str(batch_id),
-        after={
-            "code_type": code_type,
-            "value_vnd": value_vnd,
-            "requested": len(code_values) + extra_skipped,
-            "added": added,
-            "skipped": skipped,
-            "total_value_vnd": added * value_vnd,
-        },
-    )
-
-    return LoadResult(
-        batch_id=batch_id,
-        added=added,
-        skipped=skipped,
-        samples=[row.code_value for row in inserted][:SAMPLE_LIMIT],
-        stock_after=stock_after,
-    )
+#: Ghi vào kho giờ nằm ở `services/stock.py` — panel web ghi qua CHÍNH hàm đó. Giữ tên cũ
+#: ở đây vì các bài kiểm gọi qua tên này.
+LoadResult = stock_service.KetQuaNap
 
 
 def render_load_result(result: LoadResult, *, code_type: str, value_vnd: int) -> str:
@@ -278,28 +163,37 @@ async def handle_add_giffcode(update: Update, context: ContextTypes.DEFAULT_TYPE
         await sender.send_message(chat_id, ADD_USAGE)
         return
 
-    code_type = args[0].strip().lower()
-    if code_type not in CODE_TYPES:
-        await sender.send_message(
-            chat_id,
-            f"❌ Loại code không hợp lệ: {args[0]}\nHợp lệ: {', '.join(CODE_TYPES)}",
-        )
-        return
-
-    value_vnd = parse_value_vnd(args[1])
-    if value_vnd is None:
-        await sender.send_message(
-            chat_id,
-            f"❌ Mệnh giá không đọc được: {args[1]}\nDùng dạng 10k hoặc 10000.",
-        )
-        return
-
-    # Hai khoá này do migration seed và KHÔNG có default viết trong code (nguyên tắc N2):
-    # một giá trị mặc định ở đây sẽ âm thầm thay thế luật thật khi seed hỏng, và chỗ nó
-    # thay thế là câu trả lời "mệnh giá nào được nạp" — tức là tiền.
+    # Bốn hàng rào (loại code, mệnh giá trong danh sách, mệnh giá đúng loại, ngưỡng
+    # duyệt hai người) nằm trong `stock.kiem_lo_nap()`, và panel web gọi CHÍNH hàm đó.
+    # Nạp kho là hành động tạo ra tiền — một hàng rào chỉ tồn tại ở một trong hai đường vào
+    # thì không phải hàng rào.
     try:
-        allowed_values = await settings_service.get_list("code.allowed_values")
-        category_values = await settings_service.get_dict("code.category_values")
+        lo = await stock_service.kiem_lo_nap(
+            code_type=args[0].strip().lower(),
+            menh_gia_tho=args[1],
+            ma_tho=" ".join(args[2:]),
+        )
+    except stock_service.VuotNguongDuyetHaiNguoi as exc:
+        await sender.send_message(
+            chat_id,
+            f"⛔ Lô này trị giá {texts.format_vnd(exc.batch_value_vnd)}đ "
+            f"({exc.so_ma} mã), vượt ngưỡng cần duyệt hai người là "
+            f"{texts.format_vnd(exc.threshold_vnd)}đ.\n\n"
+            f"Luồng ký thứ hai chưa được xây, nên tạm thời hãy chia thành nhiều lô nhỏ hơn "
+            f"ngưỡng. Muốn đổi ngưỡng thì dùng `/setcauhinh {stock_service.DUAL_APPROVAL_KEY}` "
+            f"— khoá đó cũng cần duyệt hai người.",
+        )
+        log.warning(
+            "nap_code_vuot_nguong",
+            actor_id=tg_user.id,
+            batch_value_vnd=exc.batch_value_vnd,
+            threshold_vnd=exc.threshold_vnd,
+            so_ma=exc.so_ma,
+        )
+        return
+    except stock_service.NapKhoBiTuChoi as exc:
+        await sender.send_message(chat_id, f"❌ {exc}")
+        return
     except ConfigError as exc:
         log.error("thieu_cau_hinh_menh_gia", detail=str(exc))
         await sender.send_message(
@@ -309,76 +203,20 @@ async def handle_add_giffcode(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    if value_vnd not in allowed_values:
-        await sender.send_message(
-            chat_id,
-            f"❌ Mệnh giá {texts.format_vnd(value_vnd)}đ không nằm trong danh sách cho phép.\n"
-            f"Hợp lệ: {', '.join(texts.value_label(v) for v in allowed_values)}",
-        )
-        return
-
-    per_type = category_values.get(code_type)
-    if per_type is not None and value_vnd not in per_type:
-        await sender.send_message(
-            chat_id,
-            f"❌ Loại {code_type} không dùng mệnh giá {texts.format_vnd(value_vnd)}đ.\n"
-            f"Hợp lệ cho loại này: {', '.join(texts.value_label(v) for v in per_type)}",
-        )
-        return
-
-    raw_codes = args[2:]
-    code_values = dedupe(raw_codes)
-    if not code_values:
-        await sender.send_message(chat_id, "❌ Không có mã nào để nạp.")
-        return
-
-    # ── Ngưỡng duyệt hai người (§13.4.1) ────────────────────────────
-    # Nạp kho là hành động tạo ra tiền: 1.000 mã mệnh giá 500.000đ là nửa tỉ đồng nghĩa vụ
-    # sinh ra bằng một tin nhắn. Ngưỡng này tồn tại trong `settings` ngay từ migration đầu
-    # nhưng trước đó không có dòng code nào đọc nó — tức là luật hai chữ ký chưa từng chạy.
-    # Chưa có luồng ký thứ hai nên ở đây fail-closed: từ chối và nói rõ phải chia nhỏ lô.
-    batch_value = len(code_values) * value_vnd
-    threshold = await settings_service.get_int("admin.dual_approval_threshold_vnd", 1_000_000)
-    if batch_value > threshold:
-        await sender.send_message(
-            chat_id,
-            f"⛔ Lô này trị giá {texts.format_vnd(batch_value)}đ "
-            f"({len(code_values)} mã × {texts.format_vnd(value_vnd)}đ), "
-            f"vượt ngưỡng cần duyệt hai người là {texts.format_vnd(threshold)}đ.\n\n"
-            f"Luồng ký thứ hai chưa được xây, nên tạm thời hãy chia thành nhiều lô nhỏ hơn "
-            f"ngưỡng. Muốn đổi ngưỡng thì dùng `/setcauhinh admin.dual_approval_threshold_vnd` "
-            f"— khoá đó cũng cần duyệt hai người.",
-        )
-        log.warning(
-            "nap_code_vuot_nguong",
-            actor_id=tg_user.id,
-            batch_value_vnd=batch_value,
-            threshold_vnd=threshold,
-            so_ma=len(code_values),
-        )
-        return
-
     async with transaction() as db:
-        result = await load_codes(
-            db,
-            code_type=code_type,
-            value_vnd=value_vnd,
-            code_values=code_values,
-            actor_id=tg_user.id,
-            extra_skipped=len(raw_codes) - len(code_values),
-        )
+        result = await stock_service.nap(db, lo, actor_id=tg_user.id)
 
     log.info(
         "nap_code",
         actor_id=tg_user.id,
         batch_id=result.batch_id,
-        code_type=code_type,
-        value_vnd=value_vnd,
+        code_type=lo.code_type,
+        value_vnd=lo.value_vnd,
         added=result.added,
         skipped=result.skipped,
     )
     await sender.send_message(
-        chat_id, render_load_result(result, code_type=code_type, value_vnd=value_vnd)
+        chat_id, render_load_result(result, code_type=lo.code_type, value_vnd=lo.value_vnd)
     )
 
 
@@ -1116,13 +954,12 @@ __all__ = [
     "COMMANDS",
     "LoadResult",
     "StockRow",
-    "dedupe",
     "handle_add_giffcode",
     "handle_codes",
     "handle_del_code",
     "handle_resend_tanthu",
     "handle_tonkho",
-    "load_codes",
+    "LoadResult",
     "parse_value_vnd",
     "read_stock",
     "render_load_result",

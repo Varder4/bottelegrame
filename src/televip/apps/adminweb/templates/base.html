@@ -105,5 +105,8 @@
 {% endif %}
 
 <script src="/static/htmx.min.js" defer></script>
+{# Kịch bản riêng của từng trang. CSP là `script-src 'self'`, nên không có mã nội tuyến —
+   mọi trang cần JS phải nạp một tệp tĩnh qua khối này. #}
+{% block kich_ban %}{% endblock %}
 </body>
 </html>
