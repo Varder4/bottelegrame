@@ -53,7 +53,7 @@ from televip.core.logging import get_logger, setup_logging
 from televip.db.engine import dispose_engine, init_engine, session, transaction
 from televip.services import admin as admin_service
 from televip.services import broadcast as broadcast_service
-from televip.services import code_issuance, settings_service, stats
+from televip.services import code_issuance, media, settings_service, stats
 from televip.services.admin import Handler
 from televip.services.membership import handle_chat_member_update
 from televip.telegram import keyboards
@@ -156,6 +156,11 @@ DEFAULT_REAP_SECONDS: Final = 60
 #: `state='running'` vào bảng, còn việc bơm phải xảy ra TRONG tiến trình này.
 PUMP_SECONDS_KEY: Final = "jobs.broadcast_pump_seconds"
 DEFAULT_PUMP_SECONDS: Final = 15
+
+#: Chu kỳ job tải ảnh của panel lên Telegram. Tiến trình web không có `Bot` nên nó chỉ ghi
+#: bytes vào `media_uploads`; đây là chỗ duy nhất biến bytes đó thành một `file_id`.
+MEDIA_SECONDS_KEY: Final = "jobs.media_upload_seconds"
+DEFAULT_MEDIA_SECONDS: Final = 10
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -345,6 +350,70 @@ async def job_bom_dot_bantin(context: ContextTypes.DEFAULT_TYPE) -> None:
     await broadcast_service.resume_running_jobs()
 
 
+async def job_nap_anh(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tải ảnh panel vừa nhận lên Telegram và lấy `file_id`.
+
+    Chạy trong tiến trình BOT vì đây là nơi duy nhất có `Sender`. Ảnh gửi vào nhóm admin —
+    tin đó đồng thời là vết kiểm toán nhìn được bằng mắt: mỗi tấm ảnh vào hệ để lại đúng
+    một tin trong nhóm.
+
+    Ba nhánh hỏng, và phân biệt chúng là bắt buộc:
+
+    * `Sender` **ném** (429 kéo dài, mạng chết) — tạm thời, lùi lại và giữ nguyên bytes.
+    * `Sender` trả `None` — Telegram từ chối vĩnh viễn. Bỏ cuộc, nhưng GIỮ bytes để người
+      vận hành xem lại mà không phải tải lên lần nữa.
+
+    Lẫn hai loại này là hoặc bỏ cuộc trên một sự cố mạng thoáng qua, hoặc thử lại năm lần
+    một tấm ảnh chắc chắn hỏng — và câu hiện cho người vận hành sai theo cùng cách.
+    """
+    sender = context.application.bot_data.get("sender")
+    if sender is None:  # pragma: no cover - chỉ xảy ra nếu thứ tự khởi động đổi
+        return
+
+    async with transaction() as db:
+        viec = await media.nhan_viec(db)
+    if not viec:
+        return
+
+    group_id = get_settings().admin_group_id
+    for v in viec:
+        try:
+            ket_qua = await sender.upload_photo(
+                group_id,
+                v.du_lieu,
+                filename=v.ten_tep,
+                caption=f"panel upload #{v.upload_id} · {v.sha256[:12]}",
+                idem_key=f"media:{v.upload_id}",
+            )
+        except Exception as exc:  # noqa: BLE001 — mọi lỗi ném đều là TẠM THỜI, xem docstring
+            async with transaction() as db:
+                await media.danh_dau_hong(
+                    db, upload_id=v.upload_id, attempts=v.attempts, loi=str(exc), vinh_vien=False
+                )
+            continue
+
+        if ket_qua is None:
+            async with transaction() as db:
+                await media.danh_dau_hong(
+                    db,
+                    upload_id=v.upload_id,
+                    attempts=v.attempts,
+                    loi="Telegram từ chối tấm ảnh này, hoặc bot không ở trong nhóm admin.",
+                    vinh_vien=True,
+                )
+            continue
+
+        async with transaction() as db:
+            await media.danh_dau_xong(
+                db,
+                upload_id=v.upload_id,
+                sha256=v.sha256,
+                file_id=ket_qua.file_id,
+                width=ket_qua.width,
+                height=ket_qua.height,
+            )
+
+
 async def job_award_referral_tiers(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Phát bù mọi mốc mời bạn đã đạt mà chưa nhận.
 
@@ -422,6 +491,7 @@ async def schedule_jobs(app: Application) -> None:
     )
     reap_seconds = await settings_service.get_int(REAP_SECONDS_KEY, DEFAULT_REAP_SECONDS)
     pump_seconds = await settings_service.get_int(PUMP_SECONDS_KEY, DEFAULT_PUMP_SECONDS)
+    media_seconds = await settings_service.get_int(MEDIA_SECONDS_KEY, DEFAULT_MEDIA_SECONDS)
 
     # `first=` bằng đúng chu kỳ: lúc khởi động, việc cần làm là phục vụ update chứ không
     # phải chạy hai truy vấn tổng hợp toàn bảng.
@@ -452,6 +522,12 @@ async def schedule_jobs(app: Application) -> None:
         name="bom_dot_bantin",
     )
     queue.run_repeating(
+        job_nap_anh,
+        interval=media_seconds,
+        first=media_seconds,
+        name="nap_anh",
+    )
+    queue.run_repeating(
         job_refresh_user_stats,
         interval=stats_seconds,
         first=stats_seconds + 5,  # lệch với job kia để hai truy vấn tổng hợp không đụng nhau
@@ -462,7 +538,8 @@ async def schedule_jobs(app: Application) -> None:
         stats_giay=stats_seconds,
         reap_giay=reap_seconds,
         bom_giay=pump_seconds,
-        so_job=5,
+        anh_giay=media_seconds,
+        so_job=6,
     )
 
 

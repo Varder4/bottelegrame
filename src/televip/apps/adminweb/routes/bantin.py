@@ -45,7 +45,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from televip.apps.adminweb.deps import NguoiDung, can_quyen, ip_cua, khong_thay, kiem_csrf
@@ -53,6 +53,7 @@ from televip.apps.adminweb.menu import dung_menu
 from televip.db.engine import session, transaction
 from televip.services import admin as admin_service
 from televip.services import broadcast as broadcast_service
+from televip.services import media
 
 router = APIRouter()
 
@@ -118,6 +119,7 @@ async def man_soan(
             "nguoi": nguoi,
             "menu": menu,
             "tran_ky_tu": broadcast_service.MAX_CONTENT_CHARS,
+            "tran_anh_mb": media.MAX_ANH_BYTES // 1024 // 1024,
             "nguong": nguong,
             "nhan_tep": broadcast_service.AUDIENCE_LABEL,
             # Thứ tự quyết định giá trị MẶC ĐỊNH của ô chọn. Tệp hẹp đứng trước: một
@@ -137,11 +139,18 @@ async def tao_nhap(
     _: Annotated[NguoiDung, Depends(can_quyen("/broadcast"))],
     noi_dung: Annotated[str, Form()] = "",
     tep: Annotated[str, Form()] = "",
+    anh: Annotated[UploadFile | None, File()] = None,
 ) -> Response:
-    """Tạo nháp + dựng tệp đích. **Không gửi gì.**
+    """Tạo nháp + dựng tệp đích. **Không gửi gì, và không gọi Telegram.**
 
-    Mọi hàng rào nằm trong `create_and_materialize()`: trần độ dài, ngưỡng số đích, huỷ
-    nháp cũ của chính người này. Route chỉ dịch lỗi thành câu chữ.
+    Mọi hàng rào nằm trong service: trần độ dài và ngưỡng số đích ở
+    `create_and_materialize()`, cỡ và định dạng ảnh ở `media.xin_tai_anh()`. Route chỉ
+    dịch lỗi thành câu chữ.
+
+    Ảnh đi qua PHÒNG CHỜ: web ghi bytes, một job trong tiến trình bot tải lên Telegram rồi
+    lấy `file_id`. Nháp chỉ tạo được khi ảnh ĐÃ có `file_id`, và đó là hàng rào ở tầng dữ
+    liệu chứ không phải một cái nút bị vô hiệu — `media.file_id_cua()` đọc từ
+    `media_assets`, bảng chỉ có hàng khi `file_id` tồn tại thật.
     """
     body = noi_dung.replace("\r\n", "\n").replace("\r", "\n").strip()
     audience = tep.strip() or broadcast_service.DEFAULT_AUDIENCE
@@ -150,13 +159,54 @@ async def tao_nhap(
     if not body:
         return await _man_soan_loi(request, nguoi, body, "Chưa có nội dung.")
 
+    # ── Ảnh (không bắt buộc) ────────────────────────────────────────
+    asset_key: str | None = None
+    if anh is not None and anh.filename:
+        du_lieu = await anh.read()
+        try:
+            async with transaction() as db:
+                kq_anh = await media.xin_tai_anh(
+                    db, du_lieu=du_lieu, ten_tep=anh.filename, created_by=nguoi.user_id
+                )
+                await admin_service.write_audit(
+                    db,
+                    actor_id=nguoi.user_id,
+                    action="adminweb.tai_anh",
+                    entity_type="media_uploads",
+                    entity_id=str(kq_anh.upload_id),
+                    after={"sha256": kq_anh.sha256, "so_byte": len(du_lieu), "ip": ip},
+                )
+        except media.AnhKhongHopLe as exc:
+            return await _man_soan_loi(request, nguoi, body, str(exc))
+
+        if not kq_anh.san_sang:
+            # Ảnh mới, chưa có `file_id`. KHÔNG tạo nháp: một nháp mang `photo` rỗng sẽ
+            # lặng lẽ thành đợt gửi tin chữ, và người soạn không biết ảnh đã rơi mất.
+            return await _man_soan_loi(
+                request,
+                nguoi,
+                body,
+                f"Ảnh đang được tải lên Telegram (mã #{kq_anh.upload_id}). "
+                "Bấm Tạo bản nháp lại sau vài giây — ảnh không phải chọn lại.",
+            )
+        asset_key = kq_anh.asset_key
+
     try:
         async with transaction() as db:
+            # `photo` chỉ có mặt khi ảnh đã sẵn sàng; `outbox_method()` tự thấy khoá đó
+            # và chọn `sendPhoto`, không cần cột mới hay cờ mới.
+            payload: dict[str, object] = {"text": body}
+            if asset_key is not None:
+                file_id = await media.file_id_cua(db, asset_key)
+                if file_id is None:  # pragma: no cover - vừa kiểm san_sang ở trên
+                    return await _man_soan_loi(request, nguoi, body, "Ảnh chưa sẵn sàng.")
+                payload = {"photo": file_id, "caption": body}
+
             kq = await broadcast_service.create_and_materialize(
                 db,
                 kind="broadcast",
                 audience=audience,
-                payload={"text": body},
+                payload=payload,
                 created_by=nguoi.user_id,
             )
             await admin_service.write_audit(
@@ -169,6 +219,7 @@ async def tao_nhap(
                     "audience": audience,
                     "so_dich": kq.total,
                     "bi_tu_choi": kq.refused,
+                    "co_anh": asset_key is not None,
                     "da_huy_nhap_cu": kq.da_huy_nhap_cu,
                     "ip": ip,
                 },
@@ -206,6 +257,7 @@ async def _man_soan_loi(request: Request, nguoi: NguoiDung, noi_dung: str, loi: 
             "nguoi": nguoi,
             "menu": menu,
             "tran_ky_tu": broadcast_service.MAX_CONTENT_CHARS,
+            "tran_anh_mb": media.MAX_ANH_BYTES // 1024 // 1024,
             "nguong": nguong,
             "nhan_tep": broadcast_service.AUDIENCE_LABEL,
             "cac_tep": [broadcast_service.DEFAULT_AUDIENCE, "all"],
@@ -318,7 +370,8 @@ async def xem_thu(
             "nguoi": nguoi,
             "menu": menu,
             "tt": tt,
-            "noi_dung": nd.text,
+            "noi_dung": nd.text or nd.payload.get("caption", ""),
+            "co_anh": "photo" in nd.payload,
             "nhan_tep": broadcast_service.AUDIENCE_LABEL,
             "uoc_tinh": broadcast_service.format_duration(
                 broadcast_service.estimate_seconds(tt.total)

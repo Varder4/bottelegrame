@@ -35,7 +35,7 @@ from datetime import datetime
 from typing import Any, Literal, Protocol
 
 from sqlalchemy import update
-from telegram import Bot, CallbackQuery, InlineKeyboardMarkup, Message
+from telegram import Bot, CallbackQuery, InlineKeyboardMarkup, InputFile, Message
 from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
 
 from televip.core.clock import now_utc
@@ -135,6 +135,16 @@ class SenderStats:
         return asdict(self)
 
 
+@dataclass(frozen=True, slots=True)
+class PhotoUpload:
+    """Kết quả tải một ảnh lên Telegram. `file_id` là thứ duy nhất đáng giữ lâu dài."""
+
+    message_id: int
+    file_id: str
+    width: int | None
+    height: int | None
+
+
 class Sender:
     """Một `Sender` cho mỗi tiến trình, dùng chung cho cả ba lane."""
 
@@ -225,6 +235,51 @@ class Sender:
             call, chat_id=chat_id, lane=lane, op="send_photo", idem_key=idem_key
         )
 
+    async def upload_photo(
+        self,
+        chat_id: int,
+        photo: bytes,
+        *,
+        filename: str,
+        caption: str | None = None,
+        lane: Lane = "bulk",
+        idem_key: str | None = None,
+    ) -> PhotoUpload | None:
+        """Tải MỘT ảnh lên Telegram và trả về `file_id` của nó. `None` khi bị từ chối.
+
+        Đây là **đường duy nhất** đưa một tấm ảnh vào hệ thống, và nó chạy **đúng một lần**
+        cho mỗi ảnh. Mọi lần gửi sau đó dùng lại `file_id` — xem ghi chú ở `send_photo`.
+
+        `filename` là bắt buộc: thiếu nó thì `InputFile` của thư viện đặt mimetype
+        `application/octet-stream`, và Telegram từ chối cả tấm ảnh hợp lệ.
+
+        `lane="bulk"` vì đây là thao tác quản trị, không phải tin người dùng đang chờ —
+        nó không được chen trước một mã code đang trên đường tới tay ai đó.
+        """
+
+        async def call() -> Message:
+            return await self._bot.send_photo(
+                chat_id=chat_id,
+                photo=InputFile(photo, filename=filename),
+                caption=caption,
+            )
+
+        message = await self._deliver_message(
+            call, chat_id=chat_id, lane=lane, op="upload_photo", idem_key=idem_key
+        )
+        if message is None or not message.photo:
+            return None
+
+        # `message.photo` là danh sách các cỡ, nhỏ → lớn. Lấy cỡ LỚN NHẤT: đó là bản gốc
+        # Telegram giữ, và `file_id` của nó là thứ mọi lần gửi sau dùng lại.
+        lon_nhat = message.photo[-1]
+        return PhotoUpload(
+            message_id=message.message_id,
+            file_id=lon_nhat.file_id,
+            width=lon_nhat.width,
+            height=lon_nhat.height,
+        )
+
     async def send_document(
         self,
         chat_id: int,
@@ -293,6 +348,31 @@ class Sender:
         op: str,
         idem_key: str | None,
     ) -> int | None:
+        """`message_id` của tin đã gửi, hoặc `None` khi Telegram từ chối vĩnh viễn.
+
+        Hai dòng bọc `_deliver_message`. Hợp đồng `int | None | ném` giữ nguyên từng chữ,
+        nên sáu đường phát mã và outbox worker không phải biết gì về thay đổi này.
+        """
+        message = await self._deliver_message(
+            call, chat_id=chat_id, lane=lane, op=op, idem_key=idem_key
+        )
+        return None if message is None else message.message_id
+
+    async def _deliver_message(
+        self,
+        call: Callable[[], Awaitable[Message]],
+        *,
+        chat_id: int,
+        lane: Lane,
+        op: str,
+        idem_key: str | None,
+    ) -> Message | None:
+        """Bản đầy đủ — trả về cả đối tượng `Message`.
+
+        Tồn tại vì đúng một nơi cần nhiều hơn `message_id`: `upload_photo()` cần `file_id`
+        của ảnh vừa tải lên, và `file_id` chỉ có trong phản hồi của Telegram. Không có nó
+        thì panel web không bao giờ gửi được ảnh — tiến trình web không có `Bot` nào.
+        """
         # `idem_key` đi vào log chứ không vào một bộ nhớ đệm trong RAM: chống gửi trùng
         # là việc của hai lớp trong DB (`02-broadcast.md` §2.3.7 — PRIMARY KEY
         # (job_id, user_id) và UNIQUE idem_key). Ở đây nó là sợi chỉ để lần ra một tin
@@ -353,7 +433,7 @@ class Sender:
                 continue
             else:
                 self._stats.sent += 1
-                return message.message_id
+                return message
 
     async def _penalize(self, retry_after: float) -> None:
         """Báo 429 cho rate limiter: cooldown toàn cục + hạ ngân sách theo AIMD.

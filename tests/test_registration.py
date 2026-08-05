@@ -219,7 +219,7 @@ async def test_job_dinh_ky_lay_chu_ky_tu_settings(wired_db) -> None:
     assert intervals["reap_reservations"] == 23
     assert intervals["refresh_user_stats"] == 17, "phải dùng cùng chu kỳ với thống kê hệ thống"
 
-    # Năm job phải đủ mặt. Thiếu `award_referral_tiers` thì mốc mời bạn không bao giờ được
+    # Sáu job phải đủ mặt. Thiếu `award_referral_tiers` thì mốc mời bạn không bao giờ được
     # phát (người được mời xác minh ở tiến trình web, việc gửi mã thuộc worker); thiếu
     # `refresh_user_stats` thì bảng xếp hạng toàn thời gian rỗng vĩnh viễn; thiếu
     # `bom_dot_bantin` thì một đợt do PANEL WEB bấm gửi sẽ đứng im — tệp đích đầy, không
@@ -231,11 +231,15 @@ async def test_job_dinh_ky_lay_chu_ky_tu_settings(wired_db) -> None:
         "award_referral_tiers",
         "refresh_user_stats",
         "bom_dot_bantin",
+        "nap_anh",
     }
     # Chu kỳ bơm phải ≤ 60 giây: đó là trần đã có của panel ("hiệu lực cấu hình tối đa 60
     # giây"). Chu kỳ cao hơn nghĩa là một đợt chờ lâu hơn cả thời gian một khoá cấu hình
     # lan ra, và người vận hành sẽ kết luận đợt hỏng.
     assert intervals["bom_dot_bantin"] <= 60
+    # Thiếu `nap_anh` thì một tấm ảnh panel vừa nhận nằm mãi trong `media_uploads` — người
+    # vận hành thấy "đang tải lên…" vĩnh viễn và không có dòng lỗi nào.
+    assert intervals["nap_anh"] <= 60
 
 
 async def test_job_lam_moi_thong_ke_ghi_that_vao_bang(wired_db) -> None:

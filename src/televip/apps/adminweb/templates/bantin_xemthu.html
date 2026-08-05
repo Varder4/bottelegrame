@@ -40,6 +40,17 @@
       dạng, không rút gọn.</p>
   </div>
   <div class="p-4">
+    {% if co_anh %}
+    {# Không nhúng chính tấm ảnh: bytes đã bị xoá khỏi database ngay khi có file_id, và
+       panel không tải lại được ảnh từ Telegram (nó không có Bot). Nói rõ trạng thái thay
+       vì hiện một khung ảnh vỡ. #}
+    <div class="mb-4 flex items-center gap-3 p-3 rounded-lg bg-primary-50
+                border border-primary-200 text-sm">
+      <span class="text-primary-600 shrink-0">{{ ic.icon('kho', 'w-5 h-5') }}</span>
+      <span class="text-primary-900">Tin này gửi kèm <span class="font-medium">một tấm
+        ảnh</span> đã tải lên Telegram — nội dung bên dưới là chú thích của ảnh.</span>
+    </div>
+    {% endif %}
     <pre class="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800
                 bg-gray-50 rounded-lg p-4"><bdi>{{ noi_dung }}</bdi></pre>
   </div>
