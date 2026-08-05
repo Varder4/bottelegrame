@@ -38,6 +38,23 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Tài nguyên KHÔNG phải mã Python phải khai ở đây, nếu không `pip install .` bỏ lại
+# chúng: giao diện panel (templates/static), ảnh màn XEM SHOW FULL, và migration.
+# Triệu chứng khi thiếu là panel trả 500 lúc dựng trang, hoặc `alembic upgrade` không
+# tìm thấy version nào — cả hai đều không nói gì về nguyên nhân.
+#
+# Thư mục `webapp/` (Mini App) nằm NGOÀI package nên không khai được ở đây; đó là lý do
+# `deploy/TRIEN-KHAI.md` yêu cầu cài bằng `pip install -e .`.
+[tool.setuptools.package-data]
+televip = [
+    "assets/*",
+    "apps/adminweb/templates/*.html",
+    "apps/adminweb/static/*",
+    "db/migrations/*.py",
+    "db/migrations/versions/*.py",
+    "db/migrations/*.mako",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

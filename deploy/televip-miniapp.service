@@ -1,0 +1,28 @@
+[Unit]
+Description=HK79 - Mini App xac minh (nguoi dung mo tu trong Telegram)
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=televip
+Group=televip
+WorkingDirectory=/opt/televip
+EnvironmentFile=/opt/televip/.env
+
+# Chi nghe tren 127.0.0.1 — nginx dung truoc va lo TLS. Mo ra 0.0.0.0 la
+# mo thang cong 8099 ra internet, bo qua ca TLS lan nginx.
+ExecStart=/opt/televip/.venv/bin/uvicorn televip.apps.web.app:create_app \
+    --factory --host 127.0.0.1 --port 8099 \
+    --proxy-headers --forwarded-allow-ips=127.0.0.1
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=televip-miniapp
+
+[Install]
+WantedBy=multi-user.target

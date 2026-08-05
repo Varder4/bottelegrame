@@ -1,0 +1,34 @@
+[Unit]
+Description=HK79 - tien trinh bot (polling + job dinh ky + gui outbox)
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=televip
+Group=televip
+WorkingDirectory=/opt/televip
+EnvironmentFile=/opt/televip/.env
+ExecStart=/opt/televip/.venv/bin/python -m televip.apps.worker.main
+
+# Chet thi bat lai. `RestartSec` de 10 giay chu khong 1: chet vi Postgres chua len
+# thi bat lai ngay lap tuc chi tao ra mot vong lap chay-chet-chay.
+Restart=always
+RestartSec=10
+
+# ⚠️ CHI DUOC CHAY MOT BAN DUY NHAT cua unit nay tren toan he thong.
+# Bot dung che do polling; hai ban cung goi getUpdates thi Telegram tra
+# "Conflict: terminated by other getUpdates request" cho CA HAI va bot chet han.
+# Dung `systemctl enable --now televip-worker` mot lan; khong nhan ban unit nay.
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=televip-worker
+
+# Tat may giua chung: cho tien trinh 30 giay de gui not tin dang tren duong.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
