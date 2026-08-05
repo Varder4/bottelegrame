@@ -52,6 +52,7 @@
           <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Kiểu</th>
           <th class="text-left font-medium px-4 py-3">Giá trị</th>
           <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Đổi lần cuối</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Thao tác</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-gray-100">
@@ -77,6 +78,18 @@
           </td>
           <td class="px-4 py-3 text-right text-gray-500 whitespace-nowrap">
             {{ d.updated_at|giovn }}
+          </td>
+          {# Nút hiện rõ — xem ghi chú cùng chỗ ở `cauchu.html`. Khoá bị khoá thì vẫn mở
+             được trang chi tiết để ĐỌC giá trị đầy đủ, chỉ không có form. #}
+          <td class="px-4 py-3 text-right whitespace-nowrap">
+            <a href="/cauhinh/{{ d.key }}"
+               class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm
+                      font-medium border border-gray-300 bg-white text-gray-700
+                      transition-colors hover:bg-primary-50 hover:text-primary-700
+                      hover:border-primary-200">
+              {{ ic.icon('cauhinh', 'w-4 h-4') }}
+              {% if d.sensitive or d.bi_che %}Xem{% else %}Đổi{% endif %}
+            </a>
           </td>
         </tr>
         {% endfor %}

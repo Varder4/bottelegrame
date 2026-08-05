@@ -62,7 +62,20 @@ async def upsert_user(
             ON CONFLICT (user_id) DO UPDATE
                     SET username    = EXCLUDED.username,
                         full_name   = EXCLUDED.full_name,
-                        last_active = now()
+                        last_active = now(),
+                        -- `COALESCE` chứ không `EXCLUDED`: giữ nguyên mốc /start ĐẦU TIÊN
+                        -- nếu đã có, và chỉ điền khi còn trống.
+                        --
+                        -- Không có dòng này thì một người mở Mini App TRƯỚC khi bấm
+                        -- /start bị loại khỏi MỌI đợt bắn tin vĩnh viễn. Mini App cố ý
+                        -- tạo hàng `users` mà không đặt cột này (mở Mini App không phải
+                        -- là cho phép bot nhắn tin — xem `apps/web/miniapp.py`), nên hàng
+                        -- đã tồn tại với giá trị NULL; và bản trước chỉ đặt cột này ở
+                        -- nhánh INSERT, tức lần /start sau đó không sửa được nữa.
+                        --
+                        -- Hỏng im lặng: người đó vẫn dùng bot bình thường, vẫn nhận code,
+                        -- chỉ là không bao giờ nghe được một thông báo nào.
+                        started_bot_at = COALESCE(users.started_bot_at, now())
               RETURNING (xmax = 0) AS is_new,
                         (verified_at IS NOT NULL) AS is_verified
             """),

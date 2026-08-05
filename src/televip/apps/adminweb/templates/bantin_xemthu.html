@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Xem thử đợt #{{ tt.job_id }}{% endblock %}
+
+{% block than %}
+
+<a href="/bantin" class="inline-flex items-center gap-1.5 mb-4 text-sm text-gray-500
+                         hover:text-gray-900 transition-colors">← Bắn tin</a>
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold text-gray-900">Xem thử trước khi gửi</h1>
+  <p class="mt-2 text-gray-600">Bản nháp #{{ tt.job_id }} · tạo {{ tt.created_at|giovn }}</p>
+</div>
+
+{# ── Con số quyết định ───────────────────────────────────────────────
+   Số người nhận đặt to nhất trang, TRƯỚC nút Gửi. Một dòng "sẽ gửi cho 19.151 người" nằm
+   nhỏ bên cạnh một nút xanh là dòng người ta bấm qua mà không đọc. #}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+  <div class="flex flex-wrap items-start justify-between gap-6">
+    <div>
+      <p class="text-sm font-medium text-gray-600">Sẽ gửi tới</p>
+      <p class="mt-1 text-4xl font-bold text-gray-900">{{ tt.total|vnd }}</p>
+      <p class="mt-1 text-sm text-gray-500">người · tệp
+        <span class="font-medium text-gray-900">{{ nhan_tep.get(tt.audience, tt.audience) }}</span>
+      </p>
+    </div>
+    <div class="text-right">
+      <p class="text-sm font-medium text-gray-600">Ước tính gửi xong</p>
+      <p class="mt-1 text-2xl font-bold text-primary-600">{{ uoc_tinh }}</p>
+      <p class="mt-1 text-xs text-gray-500">theo tốc độ sàn, có thể nhanh hơn</p>
+    </div>
+  </div>
+</div>
+
+{# ── Nội dung y như người nhận sẽ thấy ───────────────────────────── #}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
+  <div class="p-4 border-b border-gray-200">
+    <h2 class="font-medium text-gray-900">Nội dung</h2>
+    <p class="mt-1 text-xs text-gray-500">Đúng những gì người nhận sẽ thấy — không định
+      dạng, không rút gọn.</p>
+  </div>
+  <div class="p-4">
+    <pre class="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800
+                bg-gray-50 rounded-lg p-4"><bdi>{{ noi_dung }}</bdi></pre>
+  </div>
+</div>
+
+{# ── Nút Gửi, hoặc lý do không gửi được ──────────────────────────── #}
+{% if tt.state != 'draft' %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+  <p class="font-medium text-gray-900">Bản nháp này không còn ở trạng thái nháp</p>
+  <p class="mt-1 text-sm text-gray-600">Hiện đang <span class="font-medium">{{ tt.state }}</span>.
+    <a href="/bantin/{{ tt.job_id }}" class="text-primary-600 hover:underline">Xem tiến độ →</a></p>
+</div>
+
+{% elif qua_han %}
+<div class="bg-white rounded-xl shadow-sm border border-amber-200 p-6">
+  <div class="flex items-start gap-3">
+    <span class="text-amber-500 shrink-0 mt-0.5">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+    <div class="text-sm">
+      <p class="font-medium text-gray-900">Bản nháp đã quá hạn</p>
+      <p class="mt-1 text-gray-600 leading-relaxed">
+        Danh sách người nhận được đóng băng lúc tạo nháp, nên một bản nháp quá
+        {{ han_phut }} phút sẽ gửi cho một tệp không còn đúng — gồm cả những người đã chặn
+        bot trong khoảng đó.
+        <a href="/bantin/moi" class="text-primary-600 hover:underline">Soạn lại →</a>
+      </p>
+    </div>
+  </div>
+</div>
+
+{% elif not cua_minh %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+  <p class="font-medium text-gray-900">Bản nháp này không phải của bạn</p>
+  <p class="mt-1 text-sm text-gray-600">Chỉ người tạo bản nháp mới bấm gửi được nó — để
+    hai người soạn cùng lúc không bấm nhầm nội dung của nhau.</p>
+</div>
+
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-red-200 overflow-hidden">
+  <div class="p-4 border-b border-red-100 bg-red-50">
+    <h2 class="font-medium text-red-900">Gửi đợt này</h2>
+  </div>
+  <div class="p-4">
+    <p class="text-sm text-gray-600 leading-relaxed mb-4">
+      Bấm Gửi là <span class="font-medium text-gray-900">không rút lại được</span>. Tin đã
+      bay thì chỉ dừng được phần chưa gửi — bằng nút Huỷ ở màn tiến độ.
+    </p>
+    <form method="post" action="/bantin/{{ tt.job_id }}/gui">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      {# Số đích người bấm ĐÃ NHÌN THẤY. Nó đi thẳng vào điều kiện của câu UPDATE: nếu tệp
+         đã đổi từ lúc mở trang này thì lệnh gửi không đổi được trạng thái. #}
+      <input type="hidden" name="so_dich" value="{{ tt.total }}">
+      <button type="submit"
+              class="inline-flex items-center gap-2 rounded-lg px-6 py-2.5 font-medium
+                     text-white bg-red-600 transition-colors hover:bg-red-700
+                     focus:outline-none focus:ring-2 focus:ring-red-500
+                     focus:ring-offset-2">
+        {{ ic.icon('bantin', 'w-4 h-4') }} Gửi cho {{ tt.total|vnd }} người
+      </button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<p class="mt-4 text-xs leading-relaxed text-gray-400">
+  Panel không tự gửi — nó chỉ ghi vào database rằng đợt được phép chạy. Việc gửi xảy ra
+  trong tiến trình bot, nơi duy nhất giữ kết nối Telegram. Tin đầu tiên bay trong vòng một
+  chu kỳ job, và màn tiến độ sẽ hiện số thật ngay khi có dòng đầu tiên vào hàng đợi.
+</p>
+
+{% endblock %}

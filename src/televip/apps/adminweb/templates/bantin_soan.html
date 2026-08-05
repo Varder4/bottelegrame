@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Soạn đợt bắn tin{% endblock %}
+
+{% block than %}
+
+<a href="/bantin" class="inline-flex items-center gap-1.5 mb-4 text-sm text-gray-500
+                         hover:text-gray-900 transition-colors">← Bắn tin</a>
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold text-gray-900">Soạn đợt bắn tin</h1>
+  <p class="mt-2 text-gray-600">
+    Bấm <span class="font-medium text-gray-900">Tạo bản nháp</span> chưa gửi gì cả — bước
+    sau còn một màn xem thử có số người nhận thật.
+  </p>
+</div>
+
+{% if loi %}
+<div role="alert" class="mb-6 p-4 rounded-xl bg-red-50 border border-red-200">
+  <div class="flex items-start gap-3">
+    <span class="text-red-500 shrink-0 mt-0.5">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+    <div class="text-sm">
+      <p class="text-red-900 font-medium">Chưa tạo được bản nháp</p>
+      <p class="mt-1 text-red-700"><bdi>{{ loi }}</bdi></p>
+      <p class="mt-1 text-red-600/80 text-xs">Nội dung bạn vừa soạn vẫn còn nguyên bên
+        dưới — không phải gõ lại.</p>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  <form method="post" action="/bantin/moi" class="p-4 space-y-5">
+    <input type="hidden" name="_csrf" value="{{ csrf }}">
+
+    <div>
+      <label for="noi_dung" class="block text-sm font-medium text-gray-700 mb-1">
+        Nội dung tin
+      </label>
+      <textarea id="noi_dung" name="noi_dung" rows="10" required
+                maxlength="{{ tran_ky_tu }}" spellcheck="false"
+                placeholder="Nội dung sẽ gửi tới người dùng…"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm
+                       text-sm leading-relaxed transition focus:outline-none
+                       focus:ring-2 focus:ring-primary-500
+                       focus:border-transparent">{{ noi_dung }}</textarea>
+      {# Trần đọc từ service, không viết cứng: đổi trần ở một chỗ thì màn hình nói theo. #}
+      <p class="mt-1.5 text-xs text-gray-500">
+        Tối đa {{ tran_ky_tu|vnd }} ký tự. Gửi dạng <span class="font-medium">văn bản
+        thuần</span> — không HTML, không Markdown: một thẻ mở không đóng làm Telegram từ
+        chối <em>cả đợt</em> và không ai nhận được gì.
+      </p>
+    </div>
+
+    <div>
+      <label for="tep" class="block text-sm font-medium text-gray-700 mb-1">
+        Tệp người nhận
+      </label>
+      {# Mục ĐẦU là tệp hẹp, và đó là giá trị mặc định khi người ta không đụng vào. Một ô
+         chọn mà mục đầu là "TOÀN BỘ" biến hàng rào này thành cái ngược lại. #}
+      <select id="tep" name="tep"
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm text-sm
+                     transition focus:outline-none focus:ring-2 focus:ring-primary-500
+                     focus:border-transparent">
+        {% for ma in cac_tep %}
+        <option value="{{ ma }}">{{ nhan_tep.get(ma, ma) }}</option>
+        {% endfor %}
+      </select>
+      <p class="mt-1.5 text-xs text-gray-500">
+        Mặc định là tệp <span class="font-medium">hẹp</span>. Người đã chặn bot, đã tắt
+        thông báo, hoặc chưa từng bấm <code class="font-mono">/start</code> luôn bị loại
+        khỏi mọi tệp — không có ô nào bật lại được điều đó.
+      </p>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-3 pt-1">
+      <button type="submit"
+              class="inline-flex items-center gap-2 rounded-lg font-medium transition-colors
+                     px-6 py-2.5 bg-primary-600 text-white hover:bg-primary-700
+                     focus:outline-none focus:ring-2 focus:ring-primary-500
+                     focus:ring-offset-2">
+        {{ ic.icon('bantin', 'w-4 h-4') }} Tạo bản nháp
+      </button>
+      <span class="text-xs text-gray-500">Bước này <span class="font-medium">chưa gửi
+        gì</span> — nó chỉ dựng danh sách người nhận để bạn xem trước.</span>
+    </div>
+  </form>
+</div>
+
+<p class="mt-4 text-xs leading-relaxed text-gray-400">
+  Đợt có ít hơn {{ nguong|vnd }} người nhận sẽ bị <span class="font-medium">từ chối</span>
+  và bản nháp bị huỷ ngay: số đích thấp bất thường hầu như luôn là bộ lọc sai, không phải
+  tệp nhỏ thật. Mỗi người chỉ giữ được một bản nháp — tạo bản mới thì bản cũ của bạn tự
+  huỷ, để không có nội dung đã bị thay nào còn bấm gửi được.
+</p>
+
+{% endblock %}

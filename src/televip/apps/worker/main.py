@@ -151,6 +151,12 @@ OUTBOX_TASK_KEY = "outbox_worker_task"
 REAP_SECONDS_KEY: Final = "jobs.reap_reservations_seconds"
 DEFAULT_REAP_SECONDS: Final = 60
 
+#: Chu kỳ job bơm đợt bắn tin đang chạy. Đây là mắt xích duy nhất biến một lần bấm "Gửi"
+#: trên panel web thành tin thật bay đi: web không giữ kết nối Telegram nào nên nó chỉ ghi
+#: `state='running'` vào bảng, còn việc bơm phải xảy ra TRONG tiến trình này.
+PUMP_SECONDS_KEY: Final = "jobs.broadcast_pump_seconds"
+DEFAULT_PUMP_SECONDS: Final = 15
+
 
 # ══════════════════════════════════════════════════════════════════════
 # Phân giải "module:hàm"
@@ -322,6 +328,23 @@ async def job_reap_reservations(context: ContextTypes.DEFAULT_TYPE) -> None:
         log.info("ma_giu_cho_qua_han_da_tra_ve_kho", so_luong=released)
 
 
+async def job_bom_dot_bantin(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Bơm tiếp mọi đợt bắn tin đang ở `running` — kể cả đợt do panel web bắt đầu.
+
+    Thân hàm đúng một dòng, và đó là chủ ý: `resume_running_jobs()` ĐÃ là "quét bảng tìm
+    việc chưa làm". Viết một vòng quét thứ hai ở đây là dựng bản sao của một luật.
+
+    Không có job này thì một đợt do web bắt đầu sẽ đứng im: tệp đích đầy, KHÔNG một dòng
+    `outbox_messages` nào, KHÔNG một tin nào bay, và KHÔNG một dòng log lỗi nào — cho tới
+    lần khởi động lại bot kế tiếp, lúc đó cả đợt bỗng bắn đi. Đó là loại hỏng tệ nhất:
+    hỏng im lặng, và tự sửa vào một thời điểm không ai chọn.
+
+    `start_pump` tự bỏ qua đợt đã có vòng bơm sống trong tiến trình này, và một khoá tư vấn
+    cấp database chặn hai TIẾN TRÌNH cùng bơm một đợt — nên gọi lặp lại là vô hại.
+    """
+    await broadcast_service.resume_running_jobs()
+
+
 async def job_award_referral_tiers(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Phát bù mọi mốc mời bạn đã đạt mà chưa nhận.
 
@@ -398,6 +421,7 @@ async def schedule_jobs(app: Application) -> None:
         stats.REFRESH_SECONDS_KEY, stats.DEFAULT_REFRESH_SECONDS
     )
     reap_seconds = await settings_service.get_int(REAP_SECONDS_KEY, DEFAULT_REAP_SECONDS)
+    pump_seconds = await settings_service.get_int(PUMP_SECONDS_KEY, DEFAULT_PUMP_SECONDS)
 
     # `first=` bằng đúng chu kỳ: lúc khởi động, việc cần làm là phục vụ update chứ không
     # phải chạy hai truy vấn tổng hợp toàn bảng.
@@ -422,6 +446,12 @@ async def schedule_jobs(app: Application) -> None:
         name="award_referral_tiers",
     )
     queue.run_repeating(
+        job_bom_dot_bantin,
+        interval=pump_seconds,
+        first=pump_seconds,
+        name="bom_dot_bantin",
+    )
+    queue.run_repeating(
         job_refresh_user_stats,
         interval=stats_seconds,
         first=stats_seconds + 5,  # lệch với job kia để hai truy vấn tổng hợp không đụng nhau
@@ -431,7 +461,8 @@ async def schedule_jobs(app: Application) -> None:
         "job_dinh_ky_da_dat",
         stats_giay=stats_seconds,
         reap_giay=reap_seconds,
-        so_job=4,
+        bom_giay=pump_seconds,
+        so_job=5,
     )
 
 

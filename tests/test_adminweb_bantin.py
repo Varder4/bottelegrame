@@ -80,18 +80,25 @@ def test_panel_KHONG_co_route_nao_bat_dau_hay_chay_tiep() -> None:
     from televip.apps.adminweb.routes import bantin
 
     duong = {r.path for r in bantin.router.routes}
+    # `gui` giờ HỢP LỆ — nó chỉ lật trạng thái, không bơm. Cái vẫn bị cấm là tạm dừng và
+    # chạy tiếp: hai thao tác đó đổi trạng thái mà KHÔNG khởi động vòng gửi nào, nên đợt
+    # sẽ trông như đang chạy trong khi không một tin nào bay.
     cam = {
-        "/bantin/{job_id}/gui",
-        "/bantin/{job_id}/batdau",
         "/bantin/{job_id}/tamdung",
         "/bantin/{job_id}/chaytiep",
-        "/bantin/tao",
+        "/bantin/{job_id}/pause",
+        "/bantin/{job_id}/resume",
     }
-    assert not (duong & cam), f"panel không được có route gửi/tạm dừng/chạy tiếp: {duong & cam}"
+    assert not (duong & cam), f"panel không được có route tạm dừng/chạy tiếp: {duong & cam}"
 
-    # Và đúng một đường GHI, không hơn.
+    # ĐÚNG ba đường ghi, không hơn. Ba cái này là toàn bộ những gì panel được phép làm:
+    # soạn nháp, bấm gửi (chỉ lật trạng thái), và huỷ.
     ghi = {r.path for r in bantin.router.routes if "POST" in getattr(r, "methods", set())}
-    assert ghi == {"/bantin/{job_id}/huy"}, f"đường ghi ngoài dự kiến: {ghi}"
+    assert ghi == {
+        "/bantin/moi",
+        "/bantin/{job_id}/gui",
+        "/bantin/{job_id}/huy",
+    }, f"đường ghi ngoài dự kiến: {ghi}"
 
 
 def test_tien_trinh_adminweb_khong_giu_doi_tuong_Bot() -> None:

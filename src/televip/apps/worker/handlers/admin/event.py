@@ -347,7 +347,7 @@ async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, job_id: int) -> None:
     async with transaction() as db:
-        started = await broadcast_service.start(db, job_id=job_id)
+        started = await broadcast_service.start(db, job_id=job_id, kind="send_event")
         snapshot = await broadcast_service.status(db, job_id)
         event_id = await event_box.event_of_job(db, job_id=job_id)
 

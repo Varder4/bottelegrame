@@ -35,7 +35,6 @@ import re
 from dataclasses import dataclass
 from typing import Any, Final
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
@@ -45,8 +44,16 @@ from televip.core.logging import get_logger
 from televip.db.engine import session, transaction
 from televip.domain import texts
 from televip.services import broadcast as broadcast_service
-from televip.services import settings_service
 from televip.services.admin import Handler, admin_command
+
+# Nhập lại dưới TÊN CŨ: ba thứ này từng là mã của file này, nhưng chúng là HÀNG RÀO — trần
+# độ dài và ngưỡng số đích — nên chúng thuộc về service để đường vào thứ hai (panel web)
+# dùng chung, không chép.
+from televip.services.broadcast import (
+    MAX_CONTENT_CHARS,
+    MIN_AUDIENCE_KEY,
+    min_audience,
+)
 
 log = get_logger(__name__)
 
@@ -63,8 +70,6 @@ FLAG_FORCE_SMALL: Final = "--force-small"
 
 #: Số đích tối thiểu của một đợt. Khoá seed ở migration `0006`; hằng số dưới đây chỉ là
 #: đường lui khi bảng `settings` chưa được seed (bản cài mới, database test).
-MIN_AUDIENCE_KEY: Final = "broadcast.min_audience"
-DEFAULT_MIN_AUDIENCE: Final = 1
 
 #: Callback của hai nút xác nhận. `main.py` đăng ký `^bc_(confirm|cancel)_\\d+$`.
 CB_CONFIRM_PREFIX: Final = "bc_confirm_"
@@ -80,7 +85,6 @@ PREVIEW_CHARS: Final = 1_200
 #: lại. Với một đợt bắn tin, hậu quả không phải "một tin hỏng" mà là toàn bộ đợt chạy hết
 #: vòng, đếm đủ số đích, và **không một ai nhận được gì**. Chừa 96 ký tự đệm, cùng con số
 #: và cùng lý do với `text_service.MAX_RENDERED_LENGTH`.
-MAX_CONTENT_CHARS: Final = 4_000
 
 # Hai bảng nhãn đã chuyển sang service: panel web cũng hiện `audience` và `state`, và hai
 # màn hình gọi cùng một tệp người nhận bằng hai tên khác nhau là chỗ người vận hành đọc
@@ -172,14 +176,6 @@ def _preview_body(content: str) -> str:
     if len(content) <= PREVIEW_CHARS:
         return content
     return f"{content[:PREVIEW_CHARS]}…\n(còn {len(content) - PREVIEW_CHARS} ký tự nữa)"
-
-
-async def min_audience(db: AsyncSession | None = None) -> int:
-    """Ngưỡng đích tối thiểu — xem ghi chú ở `MIN_AUDIENCE_KEY`.
-
-    `db` để dùng lại session đang mở; bỏ trống thì `settings_service` tự mở session riêng.
-    """
-    return await settings_service.get_int(MIN_AUDIENCE_KEY, DEFAULT_MIN_AUDIENCE, db=db)
 
 
 #: Một cờ là một từ bắt đầu bằng `--` đứng ngay sau khoảng trắng (hoặc đầu chuỗi). Ràng
@@ -350,7 +346,7 @@ async def _dispatch_broadcast_callback(update: Update, context: ContextTypes.DEF
 
 async def _confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, job_id: int) -> None:
     async with transaction() as db:
-        started = await broadcast_service.start(db, job_id=job_id)
+        started = await broadcast_service.start(db, job_id=job_id, kind="broadcast")
         snapshot = await broadcast_service.status(db, job_id)
 
     if snapshot is None:

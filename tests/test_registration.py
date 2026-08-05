@@ -219,15 +219,23 @@ async def test_job_dinh_ky_lay_chu_ky_tu_settings(wired_db) -> None:
     assert intervals["reap_reservations"] == 23
     assert intervals["refresh_user_stats"] == 17, "phải dùng cùng chu kỳ với thống kê hệ thống"
 
-    # Bốn job phải đủ mặt. Thiếu `award_referral_tiers` thì mốc mời bạn không bao giờ được
+    # Năm job phải đủ mặt. Thiếu `award_referral_tiers` thì mốc mời bạn không bao giờ được
     # phát (người được mời xác minh ở tiến trình web, việc gửi mã thuộc worker); thiếu
-    # `refresh_user_stats` thì bảng xếp hạng toàn thời gian rỗng vĩnh viễn.
+    # `refresh_user_stats` thì bảng xếp hạng toàn thời gian rỗng vĩnh viễn; thiếu
+    # `bom_dot_bantin` thì một đợt do PANEL WEB bấm gửi sẽ đứng im — tệp đích đầy, không
+    # một dòng outbox nào, không một tin nào bay, và không một dòng log lỗi nào — cho tới
+    # lần khởi động lại kế tiếp, lúc đó cả đợt bỗng bắn đi.
     assert set(intervals) == {
         "refresh_system_stats",
         "reap_reservations",
         "award_referral_tiers",
         "refresh_user_stats",
+        "bom_dot_bantin",
     }
+    # Chu kỳ bơm phải ≤ 60 giây: đó là trần đã có của panel ("hiệu lực cấu hình tối đa 60
+    # giây"). Chu kỳ cao hơn nghĩa là một đợt chờ lâu hơn cả thời gian một khoá cấu hình
+    # lan ra, và người vận hành sẽ kết luận đợt hỏng.
+    assert intervals["bom_dot_bantin"] <= 60
 
 
 async def test_job_lam_moi_thong_ke_ghi_that_vao_bang(wired_db) -> None:
@@ -446,3 +454,72 @@ async def test_set_menu_nguoi_chua_start_thi_tra_False_chu_khong_nem(wired_db) -
 
     bot = FakeBot(fail_for={970_060})
     assert await main.set_menu_for_user(SimpleNamespace(bot=bot), 970_060) is False  # type: ignore[arg-type]
+
+
+# ── /start sau khi đã có hàng users ─────────────────────────────────
+
+
+async def test_start_dien_started_bot_at_cho_hang_da_ton_tai(wired_db) -> None:
+    """Mở Mini App trước rồi mới bấm `/start` — người này phải vào được tệp bắn tin.
+
+    Mini App **cố ý** tạo hàng `users` mà không đặt `started_bot_at`: mở Mini App qua một
+    link `t.me` không phải là cho phép bot nhắn tin, và đặt nhầm cột đó là đẩy người chưa
+    /start vào danh sách broadcast rồi ăn 403 hàng loạt.
+
+    Nhưng lần `/start` SAU đó thì phải điền. Bản trước chỉ đặt cột này ở nhánh `INSERT`,
+    nên hàng đã tồn tại với `NULL` không bao giờ được sửa — và người đó bị loại khỏi MỌI
+    đợt bắn tin vĩnh viễn. Hỏng im lặng: họ vẫn dùng bot bình thường, vẫn nhận code, chỉ
+    là không bao giờ nghe được một thông báo nào.
+    """
+    from televip.db.engine import transaction
+    from televip.services import users as users_service
+
+    uid = 971_101
+    # Đúng câu mà Mini App chạy: KHÔNG có `started_bot_at`.
+    async with db_session() as s:
+        await s.execute(
+            text(
+                "INSERT INTO users (user_id, username, full_name, last_active) "
+                "VALUES (:u, 'tumini', 'Tu Mini App', now())"
+            ),
+            {"u": uid},
+        )
+        await s.commit()
+
+    async with db_session() as s:
+        truoc = (
+            await s.execute(text("SELECT started_bot_at FROM users WHERE user_id = :u"), {"u": uid})
+        ).scalar_one()
+    assert truoc is None, "dữ liệu mẫu phải bắt đầu từ trạng thái chưa /start"
+
+    async with transaction() as s:
+        await users_service.upsert_user(s, user_id=uid, username="tumini", full_name="Tu Mini App")
+
+    async with db_session() as s:
+        sau = (
+            await s.execute(text("SELECT started_bot_at FROM users WHERE user_id = :u"), {"u": uid})
+        ).scalar_one()
+    assert sau is not None, "/start phải điền started_bot_at cho hàng đã tồn tại"
+
+
+async def test_start_lan_hai_KHONG_doi_moc_start_dau_tien(wired_db) -> None:
+    """Giữ nguyên mốc /start ĐẦU TIÊN — nó là dữ liệu, không phải một cờ."""
+    from televip.db.engine import transaction
+    from televip.services import users as users_service
+
+    uid = 971_102
+    async with transaction() as s:
+        await users_service.upsert_user(s, user_id=uid, username="lan1", full_name="Lan 1")
+    async with db_session() as s:
+        lan1 = (
+            await s.execute(text("SELECT started_bot_at FROM users WHERE user_id = :u"), {"u": uid})
+        ).scalar_one()
+
+    async with transaction() as s:
+        await users_service.upsert_user(s, user_id=uid, username="lan2", full_name="Lan 2")
+    async with db_session() as s:
+        lan2 = (
+            await s.execute(text("SELECT started_bot_at FROM users WHERE user_id = :u"), {"u": uid})
+        ).scalar_one()
+
+    assert lan1 == lan2, "mốc /start đầu tiên không được ghi đè"

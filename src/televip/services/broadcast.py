@@ -49,8 +49,10 @@ from typing import Any, Final
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from televip.core.clock import now_utc
 from televip.core.logging import get_logger
 from televip.db.engine import transaction
+from televip.services import settings_service
 
 log = get_logger(__name__)
 
@@ -80,6 +82,32 @@ TARGET_SKIPPED: Final = 3
 
 #: Số đích chuyển sang outbox mỗi lô. Nhỏ để một lần `pause` có hiệu lực gần như tức thì
 #: và để giao dịch không giữ khoá trên hàng nghìn hàng cùng lúc.
+#: Trần độ dài nội dung một đợt. Telegram từ chối tin quá 4.096 ký tự bằng `BadRequest`,
+#: và lớp gửi coi `BadRequest` là lỗi VĨNH VIỄN nên không thử lại: cả đợt chạy hết vòng,
+#: đếm đủ số đích, và KHÔNG MỘT AI nhận được gì.
+#:
+#: Trần này vốn nằm trong tầng phân tích tham số của lệnh Telegram, tức mọi đường vào
+#: không-phải-Telegram đều đi vòng qua nó. Ép trong `create_job()` thì không đường vào nào
+#: bỏ qua được, kể cả một script chạy tay.
+MAX_CONTENT_CHARS: Final = 4_000
+
+#: Khoá cấu hình ngưỡng số người nhận tối thiểu, và giá trị đường lui.
+MIN_AUDIENCE_KEY: Final = "broadcast.min_audience"
+DEFAULT_MIN_AUDIENCE: Final = 1
+
+#: Tệp mặc định khi người tạo không chọn gì. **Hẹp**, không phải toàn bộ: một đợt gửi nhầm
+#: toàn tệp là 19.151 tin không rút lại được, còn gửi nhầm tệp hẹp là vài nghìn.
+DEFAULT_AUDIENCE: Final = "active_30d"
+
+#: Nháp quá tuổi này thì không bấm Gửi được nữa. Tệp đích đóng băng ở thời điểm tạo nháp,
+#: nên một bản nháp để quên vài ngày sẽ gửi cho một tệp không còn đúng — gồm cả những người
+#: đã chặn bot trong khoảng đó.
+DRAFT_MAX_AGE_SECONDS: Final = 3_600
+
+#: Không gian khoá tư vấn của luồng bắn tin — `0x4243` = "BC". Khác `0x4556` ("EV", trần
+#: ngân sách event) và `0x4344` ("CD", chiến dịch).
+PUMP_LOCK_NS: Final = 0x4243
+
 PUMP_BATCH: Final = 200
 
 #: Trần tồn đọng của `outbox_messages`. Hàng đợi outbox dùng CHUNG cho tin cá nhân (trả
@@ -174,7 +202,8 @@ async def create_job(
     lưu **một lần** ở `payload` — hệ cũ nhét bản sao nội dung vào từng dòng hàng đợi.
 
     Ném:
-        ValueError: `kind` hoặc `audience` không hợp lệ.
+        ValueError: `kind` / `audience` không hợp lệ, nội dung quá dài, hoặc payload mang
+            `parse_mode`.
     """
     if kind not in KINDS:
         raise ValueError(f"kind không hợp lệ: {kind!r} (hợp lệ: {', '.join(sorted(KINDS))})")
@@ -182,6 +211,20 @@ async def create_job(
         raise ValueError(
             f"audience không hợp lệ: {audience!r} (hợp lệ: {', '.join(sorted(AUDIENCES))})"
         )
+
+    # Trần độ dài ép Ở ĐÂY, không ở tầng đọc tham số: xem ghi chú của `MAX_CONTENT_CHARS`.
+    for truong in ("text", "caption"):
+        noi_dung = payload.get(truong)
+        if isinstance(noi_dung, str) and len(noi_dung) > MAX_CONTENT_CHARS:
+            raise ValueError(
+                f"nội dung dài {len(noi_dung)} ký tự, vượt trần {MAX_CONTENT_CHARS} — "
+                "Telegram sẽ từ chối cả đợt và không ai nhận được gì"
+            )
+
+    # `parse_mode` mở đường cho HTML/Markdown do người gõ tự chèn. Một thẻ mở không đóng là
+    # `BadRequest` cho TỪNG tin, tức cả đợt hỏng theo cùng một kiểu vĩnh viễn.
+    if "parse_mode" in payload:
+        raise ValueError("payload không được mang 'parse_mode' — nội dung gửi dạng văn bản thuần")
 
     row = await db.execute(
         text(_SQL_CREATE_JOB),
@@ -403,15 +446,73 @@ async def _transition(
     return row.scalar_one_or_none()
 
 
-async def start(db: AsyncSession, *, job_id: int) -> str | None:
-    """`draft` → `running`. Trả `'running'` khi đổi được, `None` khi đợt không còn ở `draft`.
+#: Một câu `UPDATE` có điều kiện, NGUYÊN TỬ. Postgres khoá hàng, nên hai request đồng thời
+#: (bấm lại nút, F5 trên POST, hai tab) chỉ ĐÚNG MỘT cái nhận được `RETURNING` — cái còn
+#: lại thấy `None` và không bơm gì. Đây là chỗ chống bấm-gửi-hai-lần, và nó nằm ở tầng
+#: database chứ không ở giao diện: một nút bị vô hiệu bằng JavaScript không chặn được `curl`.
+#:
+#: Bốn điều kiện phụ, mỗi cái chặn một kịch bản khác nhau — xem docstring của `start()`.
+_SQL_START = """
+UPDATE broadcast_jobs
+   SET state = 'running'
+ WHERE job_id = :job_id
+   AND state = 'draft'
+   AND kind = :kind
+   AND created_by = COALESCE(CAST(:actor AS bigint), created_by)
+   AND total = COALESCE(CAST(:expect_total AS int), total)
+   AND created_at > now() - make_interval(secs => CAST(:max_age AS int))
+RETURNING state
+"""
+
+
+async def start(
+    db: AsyncSession,
+    *,
+    job_id: int,
+    kind: str,
+    actor_id: int | None = None,
+    expect_total: int | None = None,
+    max_age_seconds: int = DRAFT_MAX_AGE_SECONDS,
+) -> str | None:
+    """`draft` → `running`. Trả `'running'` khi đổi được, `None` khi KHÔNG đủ điều kiện.
 
     `None` là câu trả lời đúng cho lượt bấm xác nhận thứ hai: đợt đã chạy rồi, và bắt đầu
     lại là gửi lần hai cho những người đã nhận.
+
+    Bốn điều kiện phụ, mỗi cái chặn đúng một kịch bản đã đo được:
+
+    ``kind`` — **bắt buộc**. Bản trước chỉ kiểm `state`, và trên Telegram điều đó an toàn vì
+    `callback_data` chỉ đến từ nút do chính bot dựng. Trên web `job_id` là một trường POST
+    giả được: một tài khoản có `/send_event` nhưng KHÔNG có `/broadcast` chỉ cần POST id của
+    một đợt broadcast nháp là bắn tin cho 19.151 người bằng một quyền họ không có.
+
+    ``actor_id`` — chỉ người TẠO nháp mới bấm gửi được nó. Không có nó thì hai admin soạn
+    hai bản nháp cùng lúc có thể bấm nhầm nháp của nhau.
+
+    ``expect_total`` — số đích mà người bấm ĐÃ NHÌN THẤY trên màn xem thử. Lệch thì từ chối:
+    một màn xem thử mở từ hôm qua nói "gửi cho 3.000 người" trong khi tệp thật đã thành
+    18.000 là một lần bấm với thông tin sai.
+
+    ``max_age_seconds`` — tệp đích đóng băng ở thời điểm tạo nháp, nên một bản nháp để quên
+    vài ngày sẽ gửi cho một tệp không còn đúng.
     """
-    new = await _transition(db, job_id=job_id, from_states=["draft"], new_state="running")
+    row = await db.execute(
+        text(_SQL_START),
+        {
+            "job_id": job_id,
+            "kind": kind,
+            "actor": actor_id,
+            "expect_total": expect_total,
+            "max_age": int(max_age_seconds),
+        },
+    )
+    new = row.scalar_one_or_none()
     if new is not None:
-        log.info("broadcast_bat_dau", job_id=job_id)
+        log.info("broadcast_bat_dau", job_id=job_id, kind=kind, by=actor_id)
+    else:
+        # Ghi cả lượt KHÔNG bắt đầu được: đó là thứ cần trả lời khi soát lại "vì sao đợt
+        # này không chạy" — im lặng ở đây là im lặng đúng chỗ khó chẩn đoán nhất.
+        log.warning("broadcast_bat_dau_tu_choi", job_id=job_id, kind=kind, by=actor_id)
     return new
 
 
@@ -538,6 +639,173 @@ async def latest_job_id(db: AsyncSession, *, only_active: bool = True) -> int | 
     return None if job_id is None else int(job_id)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Tạo nháp: một hàm, hai đường vào
+# ══════════════════════════════════════════════════════════════════════
+#
+# Trước bản này, "tạo đợt" là bốn bước rời nhau nằm trong handler Telegram: đọc ngưỡng, tạo
+# job, dựng tệp đích, rồi huỷ nếu dưới ngưỡng. Bốn bước ấy đúng thứ tự thì an toàn; sai thứ
+# tự thì để lại một bản nháp "GỬI NGAY" treo lơ lửng chờ ai đó bấm nhầm.
+#
+# Gói lại thành một hàm để đường vào thứ hai (panel web) không phải nhớ thứ tự — và không
+# thể nhớ sai.
+
+
+@dataclass(frozen=True, slots=True)
+class DraftResult:
+    """Kết quả tạo nháp. `refused=True` nghĩa là nháp đã bị HUỶ, không phải đang chờ."""
+
+    job_id: int
+    total: int
+    audience: str
+    refused: bool
+    #: Ngưỡng đang áp dụng — để tầng hiển thị nói được con số thật, không phải một câu chung.
+    minimum: int
+    #: Nháp cùng loại của chính người này vừa bị huỷ để nhường chỗ.
+    da_huy_nhap_cu: list[int]
+
+
+async def min_audience(db: AsyncSession | None = None) -> int:
+    """Ngưỡng số người nhận tối thiểu của một đợt."""
+    return await settings_service.get_int(MIN_AUDIENCE_KEY, DEFAULT_MIN_AUDIENCE, db=db)
+
+
+_SQL_MY_DRAFTS = """
+SELECT job_id FROM broadcast_jobs
+ WHERE state = 'draft' AND kind = :kind AND created_by = :actor AND job_id <> :tru
+ ORDER BY job_id
+"""
+
+
+async def create_and_materialize(
+    db: AsyncSession,
+    *,
+    kind: str,
+    audience: str,
+    payload: dict[str, Any],
+    created_by: int,
+) -> DraftResult:
+    """Tạo nháp, dựng tệp đích, và ép ngưỡng — tất cả trong giao dịch của nơi gọi.
+
+    Ba bất biến, và cả ba đều là hàng rào chứ không phải tiện lợi:
+
+    1. **Dưới ngưỡng thì nháp bị HUỶ ngay trong cùng giao dịch.** Một đợt bị từ chối mà vẫn
+       nằm ở `draft` là một nút "GỬI NGAY" treo lơ lửng. Số đích thấp bất thường hầu như
+       luôn là bộ lọc sai, không phải tệp nhỏ thật.
+    2. **Mỗi người tối đa MỘT nháp sống cho mỗi `kind`.** Bấm "tạo nháp" hai lần cho ra hai
+       job, và bản cũ vẫn bấm gửi được — tức một nội dung đã bị thay vẫn bay đi. Nháp cũ
+       của chính người này bị huỷ, nháp của người khác **không** bị đụng.
+    3. **Tệp đích dựng NGAY**, nên `broadcast_jobs.total` là con số thật để màn xem thử in
+       ra và để `start()` đối chiếu.
+
+    ``db`` phải là session GHI. Không tự commit: nơi gọi quyết định.
+    """
+    job_id = await create_job(
+        db, kind=kind, audience=audience, payload=payload, created_by=created_by
+    )
+    total = await materialize_targets(db, job_id=job_id, audience=audience)
+
+    # Huỷ nháp cũ TRƯỚC khi trả về, và chỉ nháp của chính người này.
+    cu = [
+        int(v)
+        for v in (
+            await db.execute(
+                text(_SQL_MY_DRAFTS), {"kind": kind, "actor": created_by, "tru": job_id}
+            )
+        ).scalars()
+    ]
+    for old in cu:
+        await cancel(db, job_id=old)
+
+    nguong = await min_audience(db)
+    if total < nguong:
+        await cancel(db, job_id=job_id)
+        log.warning(
+            "broadcast_duoi_nguong", job_id=job_id, total=total, nguong=nguong, by=created_by
+        )
+        return DraftResult(
+            job_id=job_id,
+            total=total,
+            audience=audience,
+            refused=True,
+            minimum=nguong,
+            da_huy_nhap_cu=cu,
+        )
+
+    return DraftResult(
+        job_id=job_id,
+        total=total,
+        audience=audience,
+        refused=False,
+        minimum=nguong,
+        da_huy_nhap_cu=cu,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class NoiDungDot:
+    """Nội dung và tuổi của một đợt — đủ cho màn xem thử, không hơn."""
+
+    job_id: int
+    kind: str
+    payload: dict[str, Any]
+    created_by: int
+    created_at: datetime
+    #: Nháp quá tuổi thì không bấm Gửi được nữa. Tính Ở ĐÂY, không ở tầng hiển thị: điều
+    #: kiện thật nằm trong câu `UPDATE` của `start()`, và một màn hình tự tính bằng công
+    #: thức khác sẽ hiện nút Gửi cho một nháp mà service chắc chắn từ chối.
+    qua_han: bool
+
+    @property
+    def text(self) -> str:
+        gia_tri = self.payload.get("text")
+        return gia_tri if isinstance(gia_tri, str) else ""
+
+
+_SQL_JOB_CONTENT = """
+SELECT job_id, kind, payload, created_by, created_at
+  FROM broadcast_jobs WHERE job_id = :job_id
+"""
+
+
+async def job_content(db: AsyncSession, job_id: int) -> NoiDungDot | None:
+    """Nội dung một đợt. `None` khi không có đợt đó."""
+    row = (await db.execute(text(_SQL_JOB_CONTENT), {"job_id": job_id})).one_or_none()
+    if row is None:
+        return None
+    tuoi = (now_utc() - row.created_at).total_seconds()
+    return NoiDungDot(
+        job_id=row.job_id,
+        kind=row.kind,
+        payload=row.payload or {},
+        created_by=row.created_by,
+        created_at=row.created_at,
+        qua_han=tuoi > DRAFT_MAX_AGE_SECONDS,
+    )
+
+
+#: Sàn tốc độ dùng để ƯỚC TÍNH thời gian gửi. Thấp hơn trần thật (30 tin/giây) một cách có
+#: chủ ý: hàng đợi dùng chung với tin cá nhân, và một ước tính lạc quan làm người vận hành
+#: tưởng đợt đã treo trong khi nó đang chạy đúng.
+ESTIMATE_RATE: Final = 8.0
+
+
+def estimate_seconds(total: int) -> int:
+    """Ước tính thời gian gửi xong, theo sàn tốc độ."""
+    return 0 if total <= 0 else int(total / ESTIMATE_RATE) + 1
+
+
+def format_duration(seconds: int) -> str:
+    """`95` → `1 phút 35 giây`. Dùng chung cho bot và web."""
+    if seconds < 60:
+        return f"{seconds} giây"
+    phut, giay = divmod(seconds, 60)
+    if phut < 60:
+        return f"{phut} phút {giay} giây" if giay else f"{phut} phút"
+    gio, phut = divmod(phut, 60)
+    return f"{gio} giờ {phut} phút" if phut else f"{gio} giờ"
+
+
 # ── Vòng bơm nền ────────────────────────────────────────────────────
 
 _SQL_OUTBOX_BACKLOG = "SELECT count(*) FROM outbox_messages WHERE state = 0"
@@ -563,6 +831,28 @@ async def run_pump_loop(job_id: int, *, batch: int = PUMP_BATCH) -> int:
             job = (await db.execute(text(_SQL_JOB_ROW), {"job_id": job_id})).one_or_none()
             if job is None or job.state != "running":
                 return moved_total
+
+            # Khoá tư vấn LIÊN TIẾN TRÌNH. `_pump_tasks` chỉ là dict trong RAM của một
+            # tiến trình, nên nó không biết gì về vòng bơm của tiến trình khác — và hai
+            # vòng bơm cùng đợt thì mỗi vòng tự đo tồn đọng độc lập, tức trần 1.000 thành
+            # 2.000 và tin trả code của người vừa /start xếp sau gấp đôi thời gian.
+            #
+            # Bản `try_` chứ không phải bản chờ: bản chờ giữ một kết nối pool đứng im.
+            # Và khoá `xact` tự nhả cuối mỗi lô, nên một tiến trình bị kill không để lại
+            # khoá kẹt.
+            co_khoa = bool(
+                (
+                    await db.execute(
+                        text("SELECT pg_try_advisory_xact_lock(:ns, :job_id)"),
+                        {"ns": PUMP_LOCK_NS, "job_id": job_id},
+                    )
+                ).scalar_one()
+            )
+            if not co_khoa:
+                moved = -1  # "chưa tới lượt" — KHÁC hẳn 0, vốn nghĩa là "hết việc"
+                # `finally` của transaction sẽ nhả khoá; ngủ rồi thử lại ở vòng sau.
+                await asyncio.sleep(PUMP_POLL_SECONDS)
+                continue
 
             backlog = int((await db.execute(text(_SQL_OUTBOX_BACKLOG))).scalar_one())
             if backlog >= PUMP_BACKLOG_LIMIT:
@@ -596,7 +886,12 @@ def start_pump(job_id: int, *, batch: int = PUMP_BATCH) -> asyncio.Task[int] | N
 
 
 def _on_pump_done(job_id: int, task: asyncio.Task[int]) -> None:
-    _pump_tasks.pop(job_id, None)
+    # So DANH TÍNH trước khi xoá. Có một khe giữa lúc task kết thúc và lúc callback này
+    # chạy; nếu job định kỳ gọi `start_pump` trúng khe đó thì đã có một task MỚI trong
+    # dict, và `pop` vô điều kiện sẽ xoá dấu của task còn sống — sau đó lần gọi kế tiếp
+    # dựng thêm một vòng bơm thứ hai cho cùng một đợt.
+    if _pump_tasks.get(job_id) is task:
+        del _pump_tasks[job_id]
     if task.cancelled():
         return
     error = task.exception()
@@ -605,10 +900,12 @@ def _on_pump_done(job_id: int, task: asyncio.Task[int]) -> None:
         log.error("broadcast_pump_loi", job_id=job_id, detail=str(error))
 
 
-_SQL_RUNNING_JOBS = "SELECT job_id FROM broadcast_jobs WHERE state = 'running' ORDER BY job_id"
+_SQL_RUNNING_JOBS = """
+SELECT job_id FROM broadcast_jobs WHERE state = 'running' ORDER BY job_id LIMIT :lim
+"""
 
 
-async def resume_running_jobs() -> list[int]:
+async def resume_running_jobs(*, limit: int = 50) -> list[int]:
     """Bơm tiếp mọi đợt còn `running` sau khi tiến trình khởi động lại.
 
     Trạng thái nằm trong bảng chứ không trong RAM, nên "chạy tiếp" chỉ là dựng lại vòng
@@ -616,7 +913,8 @@ async def resume_running_jobs() -> list[int]:
     thái `running` — không ai nhận thêm tin và cũng không có dòng lỗi nào.
     """
     async with transaction() as db:
-        job_ids = [int(v) for v in (await db.execute(text(_SQL_RUNNING_JOBS))).scalars()]
+        rows = await db.execute(text(_SQL_RUNNING_JOBS), {"lim": limit})
+        job_ids = [int(v) for v in rows.scalars()]
     for job_id in job_ids:
         start_pump(job_id)
     if job_ids:
@@ -626,6 +924,20 @@ async def resume_running_jobs() -> list[int]:
 
 __all__ = [
     "AUDIENCE_LABEL",
+    "DEFAULT_AUDIENCE",
+    "DEFAULT_MIN_AUDIENCE",
+    "DRAFT_MAX_AGE_SECONDS",
+    "ESTIMATE_RATE",
+    "MAX_CONTENT_CHARS",
+    "MIN_AUDIENCE_KEY",
+    "PUMP_LOCK_NS",
+    "DraftResult",
+    "NoiDungDot",
+    "job_content",
+    "create_and_materialize",
+    "estimate_seconds",
+    "format_duration",
+    "min_audience",
     "JOB_STATE_LABEL",
     "DongDot",
     "list_jobs",

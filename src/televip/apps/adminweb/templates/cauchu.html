@@ -51,6 +51,7 @@
           <th class="text-left font-medium px-4 py-3">Khoá</th>
           <th class="text-left font-medium px-4 py-3">Nội dung</th>
           <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Trạng thái</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Thao tác</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-gray-100">
@@ -74,6 +75,18 @@
             <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
                          font-medium bg-gray-100 text-gray-600">Mặc định</span>
             {% endif %}
+          </td>
+          {# Nút HIỆN RÕ, không chỉ là tên khoá dạng liên kết. Thao tác chính của màn hình
+             mà chỉ nằm sau một chuỗi chữ mono thì trông như một cái nhãn, không như một
+             cái bấm được — và người dùng kết luận là màn hình chỉ để xem. #}
+          <td class="px-4 py-3 text-right whitespace-nowrap">
+            <a href="/cauchu/{{ k.key }}"
+               class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm
+                      font-medium border border-gray-300 bg-white text-gray-700
+                      transition-colors hover:bg-primary-50 hover:text-primary-700
+                      hover:border-primary-200">
+              {{ ic.icon('cauchu', 'w-4 h-4') }} Sửa
+            </a>
           </td>
         </tr>
         {% endfor %}

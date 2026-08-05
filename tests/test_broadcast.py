@@ -305,7 +305,7 @@ async def _running_job(n_users: int = 3, *, text_body: str = "xin chao") -> int:
     job_id = await new_job("all", text_body=text_body)
     async with transaction() as db:
         await service.materialize_targets(db, job_id=job_id, audience="all")
-        await service.start(db, job_id=job_id)
+        await service.start(db, job_id=job_id, kind="broadcast")
     return job_id
 
 

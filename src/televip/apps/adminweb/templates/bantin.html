@@ -4,10 +4,17 @@
 
 {% block than %}
 
-<div class="mb-6">
-  <h1 class="text-3xl font-bold text-gray-900">Bắn tin</h1>
-  <p class="mt-2 text-gray-600">Xem các đợt và tiến độ. Tạo đợt và bấm gửi vẫn làm trong
-    bot — xem ghi chú cuối trang.</p>
+<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+  <div>
+    <h1 class="text-3xl font-bold text-gray-900">Bắn tin</h1>
+    <p class="mt-2 text-gray-600">Soạn đợt mới, xem tiến độ, huỷ đợt đang chạy.</p>
+  </div>
+  <a href="/bantin/moi"
+     class="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 font-medium
+            transition-colors bg-primary-600 text-white hover:bg-primary-700
+            focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">
+    {{ ic.icon('bantin', 'w-4 h-4') }} Soạn đợt mới
+  </a>
 </div>
 
 {% if not dong %}
@@ -79,11 +86,11 @@
 {% endif %}
 
 <p class="mt-4 text-xs leading-relaxed text-gray-400">
-  Panel <span class="font-medium">không tạo đợt và không bấm gửi</span>, và đó không phải
-  sự thận trọng — tiến trình web không giữ kết nối Telegram nào, nên nó không có gì để gửi
-  bằng. Một đợt lật sang “đang chạy” từ đây sẽ đứng im mà không có một dòng lỗi nào, cho
-  tới lần khởi động lại bot kế tiếp. Thao tác duy nhất panel làm được là
-  <span class="font-medium">huỷ</span> — hướng đóng van, và không cần vòng gửi nào.
+  Panel <span class="font-medium">không tự gửi</span> — tiến trình web không giữ kết nối
+  Telegram nào. Bấm Gửi chỉ ghi vào database rằng đợt được phép chạy; việc gửi xảy ra trong
+  tiến trình bot, nơi duy nhất có kết nối đó. Panel cũng không có Tạm dừng / Chạy tiếp: hai
+  thao tác ấy chỉ đổi trạng thái mà không khởi động vòng gửi nào, nên chúng sẽ trông như đã
+  chạy tiếp trong khi không một tin nào bay. Huỷ là đường đóng van, và nó có hiệu lực ngay.
 </p>
 
 {% endblock %}
