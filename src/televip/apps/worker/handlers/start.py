@@ -74,20 +74,28 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         co_nguoi_gioi_thieu=referrer_id is not None,
     )
 
-    # Chưa xác thực thì DỪNG ở màn xác thực, không gắn bàn phím chính. Cổng chặn vốn nằm
-    # trước từng nút phát quà; đưa nó lên `/start` khiến người mới chỉ nhìn thấy đúng một
-    # việc phải làm, thay vì một bàn phím mười nút mà bấm cái nào cũng ra cùng một câu.
+    # Lời chào + BÀN PHÍM CHÍNH luôn đi trước, cho cả người chưa xác thực.
     #
-    # Dùng lại `gate.require_verified()` chứ không dựng bản sao: cùng câu chữ, cùng nút,
-    # cùng nhánh xử lý khi `webapp.url` chưa cấu hình.
-    if not await gate.require_verified(update, context):
-        return
-
+    # `main_keyboard()` được gắn ở ĐÚNG một chỗ trong cả dự án — chính dòng dưới đây. Bản
+    # trước đặt nó SAU cổng xác thực, và đường đi thật của người mới là:
+    #   /start → màn xác thực → Mini App tự đóng → tin BƯỚC 2 → nhận mã
+    # Không tin nào trong chuỗi đó mang bàn phím, nên người dùng cầm mã trong tay mà menu
+    # trống trơn, phải tự đoán ra là gõ lại `/start`. Không câu chữ nào bảo họ thế.
+    #
+    # Bàn phím là một `ReplyKeyboardMarkup`; nó KHÔNG thể đi cùng tin có nút inline (nút
+    # xác thực là WebApp, bắt buộc inline), nên nó phải có tin riêng.
     await sender.send_message(
         chat.id,
         await text_service.render("start.welcome"),
         reply_markup=keyboards.main_keyboard(),
     )
+
+    # Chưa xác thực thì màn xác thực là tin CUỐI — tức là thứ người dùng nhìn thấy ở đáy
+    # khung chat, và là việc duy nhất họ được mời làm. Các nút phát quà đều tự gác lại bằng
+    # `gate.require_verified()`, nên bàn phím hiện sẵn không mở đường tắt nào.
+    if not await gate.require_verified(update, context):
+        return
+
     await sender.send_message(
         chat.id,
         await text_service.render("start.gift_teaser"),

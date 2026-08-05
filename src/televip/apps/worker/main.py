@@ -461,7 +461,17 @@ async def job_award_referral_tiers(context: ContextTypes.DEFAULT_TYPE) -> None:
     awarded = 0
     for referrer_id in candidates:
         try:
-            async with transaction() as db:
+            # `session()` chứ KHÔNG phải `transaction()`. `award_pending_tiers()` tự mở và
+            # đóng giao dịch của nó (`db.begin()`) quanh TỪNG mốc, vì mốc này hết code thì
+            # mốc sau vẫn phải phát được. Bọc thêm một `transaction()` bên ngoài là mở
+            # giao dịch thứ hai trên cùng phiên → SQLAlchemy ném
+            # `InvalidRequestError: A transaction is already begun on this Session`.
+            #
+            # Lỗi đó rơi thẳng vào `except` ngay dưới và chỉ để lại một dòng log mỗi 60
+            # giây, nên **không ai nhận được mốc mời bạn nào** mà không có triệu chứng nào
+            # khác. Bài kiểm không bắt được vì chúng gọi thẳng `award_pending_tiers()` với
+            # một session sạch — đường đi thật khi chạy production thì đi qua đây.
+            async with session() as db:
                 tiers = await referral_handlers.award_pending_tiers(sender, db, referrer_id)
             awarded += len(tiers)
         except Exception:  # noqa: BLE001 - một người hỏng không được làm dừng cả lượt
