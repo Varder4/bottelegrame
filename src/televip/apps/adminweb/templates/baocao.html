@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Báo cáo{% endblock %}
+
+{% block than %}
+
+<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+  <div>
+    <h1 class="text-3xl font-bold text-gray-900">Báo cáo chi</h1>
+    <p class="mt-2 text-gray-600">{{ bc.label }} · {{ bc.tu|giovn }} → {{ bc.den|giovn }}</p>
+  </div>
+  <a href="/baocao/csv?ky={{ ky }}"
+     class="inline-flex items-center gap-2 rounded-lg px-5 py-2 font-medium transition-colors
+            bg-primary-600 text-white hover:bg-primary-700 focus:outline-none
+            focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">
+    {{ ic.icon('baocao', 'w-4 h-4') }} Tải CSV
+  </a>
+</div>
+
+{# Chọn kỳ. Là liên kết chứ không phải <select> + JS: trang phải dùng được khi tệp JS chưa
+   tải, và mỗi kỳ có một đường dẫn riêng chia sẻ được. #}
+<div class="mb-6 inline-flex rounded-lg border border-gray-200 bg-white p-1">
+  {% for ma, nhan in cac_ky %}
+  <a href="/baocao?ky={{ ma }}"
+     class="px-4 py-1.5 rounded-md text-sm transition-colors
+            {% if ma == ky %}bg-primary-600 text-white font-medium
+            {% else %}text-gray-600 hover:bg-gray-50{% endif %}">{{ nhan }}</a>
+  {% endfor %}
+</div>
+
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Đã chi</p>
+    <p class="mt-1 text-2xl font-bold text-primary-600">{{ bc.tong.tong_vnd|vnd }}đ</p>
+    <p class="mt-1 text-xs text-gray-500">{{ bc.tong.so_ma|vnd }} mã</p>
+  </div>
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Người nhận</p>
+    <p class="mt-1 text-2xl font-bold text-gray-900">{{ bc.tong.so_nguoi|vnd }}</p>
+  </div>
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Người mới</p>
+    <p class="mt-1 text-2xl font-bold text-gray-900">{{ bc.tong.user_moi|vnd }}</p>
+    {# Tỉ lệ chỉ có nghĩa khi mẫu số khác 0. In "0%" cho một kỳ không có ai vào là bịa ra
+       một con số; nói thẳng thì đọc được. #}
+    {% if bc.tong.user_moi %}
+    <p class="mt-1 text-xs text-gray-500">
+      {{ bc.tong.da_xac_minh|vnd }} đã xác minh
+      ({{ bc.tong.da_xac_minh * 100 // bc.tong.user_moi }}%)
+    </p>
+    {% else %}
+    <p class="mt-1 text-xs text-gray-400">chưa có ai vào trong kỳ</p>
+    {% endif %}
+  </div>
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Lượt xác minh trong kỳ</p>
+    <p class="mt-1 text-2xl font-bold text-gray-900">{{ bc.tong.xac_minh_trong_ky|vnd }}</p>
+    <p class="mt-1 text-xs text-gray-400">kể cả người vào từ kỳ trước</p>
+  </div>
+</div>
+
+{% if not bc.dong and not bc.events %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-10 text-center">
+  <div class="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-full
+              text-gray-400 mb-4">{{ ic.icon('baocao', 'w-7 h-7') }}</div>
+  <p class="font-medium text-gray-900">Kỳ này chưa phát mã nào</p>
+  <p class="mt-1 text-sm text-gray-500">Không có gì để báo cáo — đây là con số thật, không
+    phải lỗi truy vấn.</p>
+</div>
+{% endif %}
+
+{% if bc.dong %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-hidden">
+  <div class="p-4 border-b border-gray-200">
+    <h2 class="font-medium text-gray-900">Chi theo luồng</h2>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3">Loại phát</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Mệnh giá</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Số mã</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Thành tiền</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for r in bc.dong %}
+        <tr>
+          <td class="px-4 py-3 text-gray-700">{{ r.grant_type }}</td>
+          <td class="px-4 py-3 text-right text-gray-600 whitespace-nowrap">
+            {{ r.value_vnd|menh_gia }}
+          </td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-900">{{ r.so_ma|vnd }}</td>
+          <td class="px-4 py-3 text-right tabular-nums font-medium text-gray-900
+                     whitespace-nowrap">{{ r.tong_vnd|vnd }}đ</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if bc.events %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-hidden">
+  <div class="p-4 border-b border-gray-200">
+    <h2 class="font-medium text-gray-900">Event đập hộp trong kỳ</h2>
+    <p class="mt-1 text-xs text-gray-500">
+      Trần ngân sách là trần MỖI ĐỢT, nên cột “trọn đợt” mới là con số đem so với trần —
+      một đợt mở cuối kỳ trước có phần trong kỳ nhỏ mà tổng đã sát trần.
+    </p>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Đợt</th>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Mở lúc</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Trong kỳ</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Trọn đợt</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for r in bc.events %}
+        <tr>
+          <td class="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">#{{ r.event_id }}</td>
+          <td class="px-4 py-3 text-gray-500 whitespace-nowrap">{{ r.created_at|giovn }}</td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-900 whitespace-nowrap">
+            {{ r.tong_vnd_ky|vnd }}đ
+            <span class="text-xs text-gray-400">({{ r.so_ma_ky|vnd }} mã)</span>
+          </td>
+          <td class="px-4 py-3 text-right tabular-nums whitespace-nowrap
+                     {% if r.tong_vnd_doi != r.tong_vnd_ky %}font-medium text-amber-700
+                     {% else %}text-gray-500{% endif %}">
+            {{ r.tong_vnd_doi|vnd }}đ
+            <span class="text-xs text-gray-400">({{ r.so_ma_doi|vnd }} mã)</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<p class="text-xs leading-relaxed text-gray-400">
+  Mọi con số đếm trên sổ phát hành với trạng thái <code class="font-mono">delivered</code> —
+  chỉ mã đã tới tay người dùng. Mã giữ chỗ mà gửi hỏng sẽ quay về kho và không được tính:
+  một báo cáo thừa tiền sẽ chạm trần ngân sách giả rồi đóng event sớm. Ranh giới kỳ cắt theo
+  ngày nghiệp vụ giờ Việt Nam.
+</p>
+
+{% endblock %}

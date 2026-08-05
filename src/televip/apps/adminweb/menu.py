@@ -51,10 +51,10 @@ BANG_MENU: Final[tuple[MucMenu, ...]] = (
     MucMenu("/cauchu", "Câu chữ bot", "cauchu", "/noidung", sap_co=True),
     MucMenu("/cauhinh", "Cấu hình", "cauhinh", "/cauhinh", sap_co=True),
     MucMenu("/bantin", "Bắn tin", "bantin", "/broadcast", sap_co=True),
-    MucMenu("/chiendich", "Chiến dịch", "chiendich", "/chiendich", sap_co=True),
-    MucMenu("/baocao", "Báo cáo", "baocao", "/baocao", sap_co=True),
-    MucMenu("/dinhdanh", "Tra định danh", "dinhdanh", "/checkip", sap_co=True),
-    MucMenu("/nhatky", "Nhật ký", "nhatky", "/cauhinh", sap_co=True),
+    MucMenu("/chiendich", "Chiến dịch", "chiendich", "/chiendich"),
+    MucMenu("/baocao", "Báo cáo", "baocao", "/baocao"),
+    MucMenu("/dinhdanh", "Tra định danh", "dinhdanh", "/checkip"),
+    MucMenu("/nhatky", "Nhật ký", "nhatky", "/cauhinh"),
 )
 
 

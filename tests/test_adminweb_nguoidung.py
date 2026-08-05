@@ -16,6 +16,7 @@ Bốn ca dễ trượt khỏi lưới, và cả bốn đều có bài kiểm ri�
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import httpx
@@ -292,14 +293,19 @@ async def test_chi_co_user_ma_khong_co_users_thi_khong_thay_muc_menu(
 # ── Bài kiểm đọc MÃ, không chạy app ─────────────────────────────────
 
 
+#: Khối chú thích của Jinja. Bỏ chúng TRƯỚC khi soi, nếu không thì một dòng ghi chú viết
+#: "không dùng |safe ở đây" lại bị tính là vi phạm — và bài kiểm đo chữ thay vì đo cách dùng.
+_CHU_THICH_JINJA = re.compile(r"\{#.*?#\}", re.DOTALL)
+
+
 def test_khong_template_nao_dung_safe() -> None:
     """`|safe` trên dữ liệu người dùng là XSS, và nó là thứ ai đó sẽ thêm vào để "in đẹp"."""
     from televip.apps.adminweb.app import TEMPLATES_DIR
 
     pham = []
     for p in Path(TEMPLATES_DIR).glob("*.html"):
-        noi_dung = p.read_text(encoding="utf-8")
-        if "|safe" in noi_dung or "Markup(" in noi_dung:
+        ma = _CHU_THICH_JINJA.sub("", p.read_text(encoding="utf-8"))
+        if "|safe" in ma or "Markup(" in ma:
             pham.append(p.name)
     assert pham == [], f"template dùng |safe hoặc Markup(): {pham}"
 
@@ -312,9 +318,11 @@ def test_route_web_khong_tu_viet_SQL() -> None:
     """
     from televip.apps.adminweb import routes
 
+    # Đo CÁCH DÙNG, không đo chữ: một docstring nhắc tới "SELECT" là ghi chú, không phải
+    # truy vấn. Hai dấu hiệu dưới đây thì không thể là gì khác ngoài SQL viết tại chỗ.
     pham = []
     for p in Path(next(iter(routes.__path__))).glob("*.py"):
         noi_dung = p.read_text(encoding="utf-8")
-        if "SELECT " in noi_dung or "sqlalchemy import text" in noi_dung:
+        if "db.execute(" in noi_dung or "from sqlalchemy import text" in noi_dung:
             pham.append(p.name)
     assert pham == [], f"route tự viết SQL thay vì gọi services/: {pham}"

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Annotated, Final
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from televip.apps.adminweb.deps import NguoiDung, can_quyen, khong_thay
@@ -76,7 +76,9 @@ def _doc_user_id(raw: str) -> int | None:
 async def danh_sach(
     request: Request,
     nguoi: Annotated[NguoiDung, Depends(can_quyen("/users"))],
-    tim: Annotated[str, Query(max_length=100)] = "",
+    # Không `max_length`: FastAPI trả 422 khi vượt, mà 422 tự khai đường dẫn có thật.
+    # `lam_sach_token` là hàm toàn phần — chuỗi dài hay rác đều chỉ ra "không tìm thấy".
+    tim: str = "",
 ) -> Response:
     """Danh sách người mới nhất, kèm ô tra cứu."""
     token = users_service.lam_sach_token(tim)

@@ -110,12 +110,25 @@ def create_app() -> FastAPI:
 
     app.add_middleware(SecurityHeaders, secure=app.state.secure_cookies)
 
-    from televip.apps.adminweb.routes import auth, dashboard, kho, nguoidung
+    from televip.apps.adminweb.routes import (
+        auth,
+        baocao,
+        chiendich,
+        dashboard,
+        dinhdanh,
+        kho,
+        nguoidung,
+        nhatky,
+    )
 
     app.include_router(auth.router)
     app.include_router(dashboard.router)
     app.include_router(kho.router)
     app.include_router(nguoidung.router)
+    app.include_router(baocao.router)
+    app.include_router(dinhdanh.router)
+    app.include_router(nhatky.router)
+    app.include_router(chiendich.router)
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

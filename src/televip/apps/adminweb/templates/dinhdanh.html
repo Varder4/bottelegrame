@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Tra định danh{% endblock %}
+
+{#
+  ⚠️ Trang này KHÔNG được chứa chuỗi `username` ở bất kỳ đâu.
+
+  Luật riêng tư của miền: không đường nào đi từ một tín hiệu ngược về TÊN của người khác.
+  Tra theo IP trả user_id; muốn biết ai thì mở hồ sơ, và đó là một quyền khác. Có bài kiểm
+  đọc chính tệp này để khẳng định điều đó.
+#}
+
+{% block than %}
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold text-gray-900">Tra định danh</h1>
+  <p class="mt-2 text-gray-600">
+    Tra theo <span class="font-medium text-gray-900">người dùng</span> hoặc theo
+    <span class="font-medium text-gray-900">địa chỉ IP</span>.
+  </p>
+</div>
+
+<form method="get" action="/dinhdanh" class="mb-6 flex flex-wrap gap-3">
+  <div class="flex-1 min-w-[240px]">
+    <label for="tim" class="sr-only">Tra tín hiệu</label>
+    <input id="tim" name="tim" type="text" value="{{ tim }}" maxlength="100"
+           autocomplete="off" autocapitalize="none" spellcheck="false"
+           placeholder="@username · user_id · 1.2.3.4 · IPv6"
+           class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm transition
+                  focus:outline-none focus:ring-2 focus:ring-primary-500
+                  focus:border-transparent">
+  </div>
+  <button type="submit"
+          class="inline-flex items-center gap-2 rounded-lg font-medium transition-colors
+                 px-5 py-2 bg-primary-600 text-white hover:bg-primary-700
+                 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">
+    {{ ic.icon('dinhdanh', 'w-4 h-4') }} Tra
+  </button>
+</form>
+
+{# ── Chưa tra gì ───────────────────────────────────────────────── #}
+{% if kq.kieu is none %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-10 text-center">
+  <div class="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-full
+              text-gray-400 mb-4">{{ ic.icon('dinhdanh', 'w-7 h-7') }}</div>
+  <p class="font-medium text-gray-900">Nhập một người dùng hoặc một địa chỉ IP</p>
+  <p class="mt-1 text-sm text-gray-500 max-w-lg mx-auto">Màn hình này chỉ ĐO. Nó không chặn
+    ai và không chấm điểm ai — lớp luật chống gian lận cố ý chưa bật cho tới khi có đủ số
+    liệu đo.</p>
+</div>
+
+{# ── Tra hụt ───────────────────────────────────────────────────── #}
+{% elif kq.kieu == 'khong_thay' %}
+<div role="alert" class="p-4 rounded-xl bg-amber-50 border border-amber-200 text-sm">
+  <p class="text-amber-900">Không tìm thấy người dùng
+    <span class="font-medium">“<bdi>{{ tim }}</bdi>”</span>, và cũng không phải một IP hợp lệ.</p>
+</div>
+
+{# ── Tra theo NGƯỜI ────────────────────────────────────────────── #}
+{% elif kq.kieu == 'nguoi' %}
+<div class="mb-4 flex flex-wrap items-center gap-3">
+  <h2 class="text-lg font-medium text-gray-900">Tín hiệu của
+    <span class="font-mono">{{ kq.user_id }}</span></h2>
+  <a href="/nguoidung/{{ kq.user_id }}"
+     class="text-sm text-primary-600 hover:underline">Xem hồ sơ →</a>
+</div>
+
+{% if not kq.tin_hieu %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+  <p class="font-medium text-gray-900">Chưa có tín hiệu nào</p>
+  {# Nói rõ VÌ SAO trống, không để người đọc đoán giữa "sạch" và "chưa đo". #}
+  <p class="mt-2 text-sm text-gray-600 leading-relaxed">
+    Tín hiệu chỉ được ghi khi người này xác minh qua Mini App. Chưa xác minh, hoặc đã xác
+    minh từ trước khi bật thu thập, thì ở đây trống.
+  </p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Loại</th>
+          <th class="text-left font-medium px-4 py-3">Giá trị</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Dùng chung</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Lượt</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Gần nhất</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for s in kq.tin_hieu %}
+        <tr class="{% if s.dang_chu_y %}bg-amber-50/60{% endif %}">
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-gray-100 text-gray-600">{{ s.signal_type }}</span>
+          </td>
+          {# `s.nhan` là giá trị ĐÃ che ở tầng service — không dùng `s.signal_value`. #}
+          <td class="px-4 py-3 font-mono text-gray-700 break-all">{{ s.nhan }}</td>
+          <td class="px-4 py-3 text-right tabular-nums whitespace-nowrap
+                     {% if s.dang_chu_y %}text-amber-700 font-medium{% else %}text-gray-900{% endif %}">
+            {{ s.so_tai_khoan }} tài khoản
+          </td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-600">{{ s.hits }}</td>
+          <td class="px-4 py-3 text-right text-gray-500 whitespace-nowrap">
+            {{ s.last_seen|giovn }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if kq.xac_minh %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-hidden">
+  <div class="p-4 border-b border-gray-200">
+    <h2 class="font-medium text-gray-900">Lượt xác minh gần nhất</h2>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Lúc</th>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Kết luận</th>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">ASN</th>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Quốc gia</th>
+          <th class="text-left font-medium px-4 py-3">IP</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for e in kq.xac_minh %}
+        <tr>
+          <td class="px-4 py-3 text-gray-500 whitespace-nowrap">{{ e.created_at|giovn }}</td>
+          <td class="px-4 py-3 text-gray-700 whitespace-nowrap">{{ e.verdict }}</td>
+          <td class="px-4 py-3 text-gray-600 whitespace-nowrap">{{ e.asn or '—' }}</td>
+          <td class="px-4 py-3 text-gray-600 whitespace-nowrap">{{ e.country or '—' }}</td>
+          <td class="px-4 py-3 font-mono text-gray-600 break-all">{{ e.ip or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{# ── Tra theo IP ───────────────────────────────────────────────── #}
+{% elif kq.kieu == 'ip' %}
+<div class="mb-4">
+  <h2 class="text-lg font-medium text-gray-900">Tài khoản dùng
+    <span class="font-mono">{{ kq.gia_tri }}</span></h2>
+  {% if kq.chu %}
+  <p class="mt-1 text-sm text-gray-600">
+    {{ kq.chu.user_count }} tài khoản · lần gần nhất {{ kq.chu.last_seen|giovn }}
+  </p>
+  {% endif %}
+</div>
+
+{% if not kq.tai_khoan %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+  <p class="font-medium text-gray-900">Chưa có tài khoản nào gắn với giá trị này</p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Tài khoản</th>
+          <th class="text-left font-medium px-4 py-3">Trạng thái</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Lượt</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Gần nhất</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for t in kq.tai_khoan %}
+        <tr class="hover:bg-gray-50 transition-colors">
+          {# Chỉ user_id. Tên không xuất hiện ở đây — xem ghi chú đầu tệp. #}
+          <td class="px-4 py-3 whitespace-nowrap">
+            <a href="/nguoidung/{{ t.user_id }}"
+               class="font-mono text-primary-600 hover:underline">{{ t.user_id }}</a>
+          </td>
+          <td class="px-4 py-3">
+            {% if t.dang_khoa %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-red-100 text-red-700">Đang bị khoá</span>
+            {% elif t.da_xac_minh %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-green-100 text-green-700">Đã xác minh</span>
+            {% else %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-gray-100 text-gray-600">Chưa xác minh</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-600">{{ t.hits }}</td>
+          <td class="px-4 py-3 text-right text-gray-500 whitespace-nowrap">
+            {{ t.last_seen|giovn }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+{% if kq.kieu in ('nguoi', 'ip') %}
+<p class="text-xs leading-relaxed text-gray-400">
+  Địa chỉ IP hiện dạng <span class="font-medium">rút gọn</span> — đủ để đối chiếu hai lượt
+  tra, không đủ để dán đi nơi khác. Từ {{ dang_chu_y }} tài khoản dùng chung trở lên thì
+  dòng được tô sáng; đó là <em>dấu để xem</em>, không phải kết luận, và không luật nào đọc
+  con số đó. Trang này chỉ trả về mã tài khoản, không trả về tên.
+</p>
+{% endif %}
+
+{% endblock %}

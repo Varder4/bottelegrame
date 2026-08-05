@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Chiến dịch{% endblock %}
+
+{% block than %}
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold text-gray-900">Chiến dịch mời bạn</h1>
+  <p class="mt-2 text-gray-600">Xem trạng thái. Bắt đầu / gia hạn / dừng vẫn làm trong bot —
+    xem ghi chú cuối trang.</p>
+</div>
+
+{# ── Cảnh báo chiến dịch "bật mà vô hình" ────────────────────────────
+   Đây là con số duy nhất trên màn hình này mà người vận hành phải hành động ngay.
+   `campaign_window()` chỉ đọc DÒNG MỚI NHẤT thoả điều kiện, nên một dòng cũ còn cờ
+   `is_active` sẽ nằm đó mà không màn hình nào nói ra. #}
+{% if mo_coi %}
+<div role="alert" class="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-200">
+  <div class="flex items-start gap-3">
+    <span class="text-amber-500 shrink-0 mt-0.5">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+    <div class="text-sm">
+      <p class="text-amber-900 font-medium">{{ mo_coi|length }} chiến dịch còn bật nhưng
+        không chạy</p>
+      <p class="mt-1 text-amber-700 leading-relaxed">
+        Cờ <code class="font-mono">is_active</code> vẫn bật nhưng chưa tới ngày bắt đầu,
+        hoặc đã quá hạn kết thúc. Hệ thống chỉ đọc chiến dịch mới nhất, nên những dòng này
+        không hiện ở đâu khác. Dừng hẳn bằng <code class="font-mono">/chiendich end</code>
+        trong bot.
+      </p>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ── Trạng thái hiện tại ─────────────────────────────────────────── #}
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Trạng thái</p>
+    {% if cua_so.is_running %}
+    <p class="mt-1 text-2xl font-bold text-green-600">Đang chạy</p>
+    <p class="mt-1 text-xs text-gray-500">
+      còn {{ (cua_so.remaining_seconds // 3600)|vnd }} giờ
+    </p>
+    {% else %}
+    <p class="mt-1 text-2xl font-bold text-gray-300">Không chạy</p>
+    <p class="mt-1 text-xs text-gray-500">không phát mốc mời bạn nào</p>
+    {% endif %}
+  </div>
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Mỗi mốc</p>
+    <p class="mt-1 text-2xl font-bold text-gray-900">{{ tham_so.interval_people }} người</p>
+    <p class="mt-1 text-xs text-gray-500">thưởng {{ tham_so.reward_value_vnd|vnd }}đ</p>
+  </div>
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Tối đa mỗi người</p>
+    <p class="mt-1 text-2xl font-bold text-gray-900">{{ tham_so.max_claims }} mốc</p>
+    <p class="mt-1 text-xs text-gray-500">
+      trần {{ (tham_so.max_claims * tham_so.reward_value_vnd)|vnd }}đ / người
+    </p>
+  </div>
+</div>
+
+{% if not dong %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-10 text-center">
+  <div class="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-full
+              text-gray-400 mb-4">{{ ic.icon('chiendich', 'w-7 h-7') }}</div>
+  <p class="font-medium text-gray-900">Chưa có chiến dịch nào</p>
+  <p class="mt-1 text-sm text-gray-500">Không có dòng nào đang chạy nghĩa là
+    <span class="font-medium">không phát mốc mời bạn nào</span> — đó là hành vi cố ý, không
+    phải lỗi cấu hình.</p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3">Chiến dịch</th>
+          <th class="text-left font-medium px-4 py-3">Trạng thái</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Mỗi mốc</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Thưởng</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Bắt đầu</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Kết thúc</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for c in dong %}
+        <tr class="{% if c.is_active and not c.dang_chay %}bg-amber-50/60{% endif %}">
+          <td class="px-4 py-3 max-w-xs">
+            <span class="block truncate font-medium text-gray-900"><bdi>{{ c.name }}</bdi></span>
+            <code class="text-xs font-mono text-gray-400">{{ c.code }}</code>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            {% if c.dang_chay %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-green-100 text-green-700">Đang chạy</span>
+            {% elif c.is_active %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-amber-100 text-amber-800">Bật mà không chạy</span>
+            {% else %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-gray-100 text-gray-600">Đã tắt</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-700 whitespace-nowrap">
+            {{ c.interval_people }} người
+          </td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-900 whitespace-nowrap">
+            {{ c.reward_value_vnd|vnd }}đ
+          </td>
+          <td class="px-4 py-3 text-right text-gray-500 whitespace-nowrap">
+            {{ c.starts_at|giovn }}
+          </td>
+          <td class="px-4 py-3 text-right text-gray-500 whitespace-nowrap">
+            {{ c.ends_at|giovn }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<p class="mt-4 text-xs leading-relaxed text-gray-400">
+  Màn hình này <span class="font-medium">chỉ đọc</span>. Bắt đầu, gia hạn và dừng vẫn làm
+  bằng <code class="font-mono">/chiendich</code> trong bot: ba thao tác đó cần một khoá
+  cấp database và một thứ tự bắt buộc (khoá → kết thúc mọi chiến dịch đang bật → mở cái
+  mới). Dựng đường thứ hai mà chép hụt thứ tự đó là hai dòng cùng bật, và dòng cũ vẫn phát
+  thưởng sau khi người vận hành đã đọc “đã dừng”.
+</p>
+
+{% endblock %}
