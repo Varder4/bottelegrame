@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}{{ info.key }}{% endblock %}
+
+{% block than %}
+
+<a href="/cauchu" class="inline-flex items-center gap-1.5 mb-4 text-sm text-gray-500
+                         hover:text-gray-900 transition-colors">← Câu chữ bot</a>
+
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-gray-900 font-mono break-all">{{ info.key }}</h1>
+  <p class="mt-1 text-gray-600"><bdi>{{ info.label_vi }}</bdi></p>
+</div>
+
+{% if loi %}
+<div role="alert" class="mb-6 p-4 rounded-xl bg-red-50 border border-red-200">
+  <div class="flex items-start gap-3">
+    <span class="text-red-500 shrink-0 mt-0.5">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+    <div class="text-sm">
+      <p class="text-red-900 font-medium">Chưa lưu được</p>
+      <p class="mt-1 text-red-700"><bdi>{{ loi }}</bdi></p>
+      <p class="mt-1 text-red-600/80 text-xs">Nội dung bạn vừa soạn vẫn còn nguyên bên
+        dưới — không phải gõ lại.</p>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="grid gap-6 lg:grid-cols-2">
+
+  {# ── Soạn ────────────────────────────────────────────────────── #}
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+    <div class="p-4 border-b border-gray-200 flex items-center justify-between gap-2">
+      <h2 class="font-medium text-gray-900">Nội dung</h2>
+      {% if info.customized %}
+      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
+                   bg-primary-100 text-primary-700">Đã sửa</span>
+      {% else %}
+      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
+                   bg-gray-100 text-gray-600">Mặc định</span>
+      {% endif %}
+    </div>
+
+    <div class="p-4">
+      {% if sua_duoc %}
+      {# `hx-headers` của thẻ body đã gắn CSRF cho HTMX; form thuần thì gửi kèm trường ẩn.
+         Ở đây dùng POST thuần để trang sửa được cả khi tệp JS chưa tải — nó là đường duy
+         nhất đổi câu chữ trên web. #}
+      <form method="post" action="/cauchu/{{ info.key }}" class="space-y-4">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <label for="noi_dung" class="sr-only">Nội dung câu chữ</label>
+        <textarea id="noi_dung" name="noi_dung" rows="14" spellcheck="false"
+                  class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm
+                         font-mono text-sm leading-relaxed transition
+                         focus:outline-none focus:ring-2 focus:ring-primary-500
+                         focus:border-transparent">{{ noi_dung }}</textarea>
+        <div class="flex flex-wrap items-center gap-3">
+          <button type="submit"
+                  class="inline-flex items-center rounded-lg font-medium transition-colors
+                         px-6 py-2.5 bg-primary-600 text-white hover:bg-primary-700
+                         focus:outline-none focus:ring-2 focus:ring-primary-500
+                         focus:ring-offset-2">Lưu</button>
+          <span class="text-xs text-gray-500">
+            Hiệu lực trên mọi worker trong tối đa <span class="font-medium">{{ ttl }} giây</span>
+          </span>
+        </div>
+      </form>
+      {% else %}
+      <pre class="whitespace-pre-wrap break-words font-mono text-sm leading-relaxed
+                  text-gray-700 bg-gray-50 rounded-lg p-3"><bdi>{{ noi_dung }}</bdi></pre>
+      <p class="mt-3 text-xs text-gray-500">Bạn không có quyền <code
+        class="px-1.5 py-0.5 bg-gray-100 rounded-md font-mono">/suanoidung</code>.</p>
+      {% endif %}
+    </div>
+
+    {% if reset_duoc and info.customized %}
+    <div class="p-4 border-t border-gray-200 bg-gray-50">
+      <form method="post" action="/cauchu/{{ info.key }}/mac-dinh">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button type="submit"
+                class="inline-flex items-center rounded-lg px-4 py-2 text-sm text-gray-700
+                       border border-gray-300 bg-white transition-colors
+                       hover:bg-red-50 hover:text-red-600 hover:border-red-200">
+          Về bản mặc định
+        </button>
+        <span class="ml-2 text-xs text-gray-500">Ghi đè bản mặc định vào bảng — không xoá
+          dòng, lịch sử còn nguyên.</span>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Xem thử + biến bắt buộc ─────────────────────────────────── #}
+  <div class="space-y-6">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+      <div class="p-4 border-b border-gray-200">
+        <h2 class="font-medium text-gray-900">Bản xem thử</h2>
+        <p class="mt-1 text-xs text-gray-500">Điền bộ giá trị mẫu — đây là thứ người dùng
+          thật sự nhìn thấy.</p>
+      </div>
+      <div class="p-4">
+        <pre class="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800
+                    bg-gray-50 rounded-lg p-3"><bdi>{{ xem_thu }}</bdi></pre>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+      <div class="p-4 border-b border-gray-200">
+        <h2 class="font-medium text-gray-900">Biến bắt buộc</h2>
+      </div>
+      <div class="p-4">
+        {% if info.required_vars %}
+        <div class="flex flex-wrap gap-2">
+          {% for v in info.required_vars %}
+          <code class="px-2 py-1 bg-gray-100 rounded-md font-mono text-xs text-gray-700">
+            {{ '{' }}{{ v }}{{ '}' }}
+          </code>
+          {% endfor %}
+        </div>
+        <p class="mt-3 text-xs leading-relaxed text-gray-500">
+          Thiếu một biến là <span class="font-medium">bị từ chối</span>, không phải cảnh
+          báo. Một tin nhắn mất biến mã code là một người dùng nhận được tin không có mã.
+        </p>
+        {% else %}
+        <p class="text-sm text-gray-400">Khoá này không có biến nào.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if info.updated_at %}
+    <p class="text-xs text-gray-400">
+      Sửa lần cuối {{ info.updated_at|giovn }}{% if info.updated_by %} bởi
+      <a href="/nguoidung/{{ info.updated_by }}"
+         class="font-mono text-primary-600 hover:underline">{{ info.updated_by }}</a>{% endif %}.
+    </p>
+    {% endif %}
+  </div>
+
+</div>
+
+{% endblock %}

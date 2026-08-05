@@ -112,7 +112,10 @@ def create_app() -> FastAPI:
 
     from televip.apps.adminweb.routes import (
         auth,
+        bantin,
         baocao,
+        cauchu,
+        cauhinh,
         chiendich,
         dashboard,
         dinhdanh,
@@ -129,6 +132,9 @@ def create_app() -> FastAPI:
     app.include_router(dinhdanh.router)
     app.include_router(nhatky.router)
     app.include_router(chiendich.router)
+    app.include_router(cauchu.router)
+    app.include_router(cauhinh.router)
+    app.include_router(bantin.router)
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

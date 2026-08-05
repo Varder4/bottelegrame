@@ -139,17 +139,37 @@ def can_quyen(lenh: str) -> Callable[..., Awaitable[NguoiDung]]:
 async def kiem_csrf(
     request: Request, nguoi: Annotated[NguoiDung, Depends(phien_hien_tai)]
 ) -> NguoiDung:
-    """Bắt buộc cho MỌI request ghi. Thiếu header hoặc thiếu `Origin` đều là TRƯỢT.
+    """Bắt buộc cho MỌI request ghi. Thiếu token hoặc thiếu `Origin` đều là TRƯỢT.
 
     Ba lớp cùng lúc:
       1. `SameSite=Lax` trên cookie — form liên nguồn gốc không mang cookie sang.
-      2. Header `X-TV-CSRF` khớp token của phiên. Form liên nguồn gốc không đặt được
-         header tuỳ chỉnh, và panel không bật CORS nên preflight trượt.
+      2. Token của phiên phải khớp. Nhận ở **header `X-TV-CSRF`** (HTMX gắn sẵn qua
+         `hx-headers` của thẻ body) **hoặc trường ẩn `_csrf`** của một form thuần.
       3. `Origin` phải khớp. **Thiếu `Origin` cũng từ chối** — hỏng theo hướng đóng.
+
+    ## Vì sao chấp nhận cả trường ẩn, không chỉ header
+
+    Bản đầu chỉ nhận header, với lý lẽ "form liên nguồn gốc không đặt được header tuỳ
+    chỉnh". Lý lẽ đó đúng, nhưng nó cũng làm **mọi form HTML thuần không gửi được** — kể cả
+    form của chính panel. Mà panel cố ý dựng bằng form thuần để còn dùng được khi tệp JS
+    chưa tải: sửa câu chữ và sửa cấu hình là hai đường ghi duy nhất trên web, và một đường
+    ghi phụ thuộc JS là một đường ghi hỏng vào đúng lúc mạng chậm.
+
+    Trường ẩn vẫn an toàn vì nó dựa trên điều kiện thật sự chặn CSRF: **kẻ tấn công không
+    ĐỌC được token**. Trang của họ không đọc được HTML của panel (không CORS, cookie
+    `HttpOnly`), nên không dựng nổi một form có token đúng. Lớp `Origin` bắt buộc vẫn còn
+    nguyên bên dưới.
     """
     from televip.services.admin_auth import check_csrf
 
-    if not check_csrf(request.headers.get("x-tv-csrf"), nguoi.csrf_token):
+    token = request.headers.get("x-tv-csrf")
+    if token is None:
+        # `request.form()` được Starlette nhớ lại, nên route đọc lại form vẫn thấy dữ liệu.
+        form = await request.form()
+        gia_tri = form.get("_csrf")
+        token = gia_tri if isinstance(gia_tri, str) else None
+
+    if not check_csrf(token, nguoi.csrf_token):
         log.warning("adminweb_csrf_truot", user_id=nguoi.user_id, duong_dan=request.url.path)
         raise khong_thay()
 

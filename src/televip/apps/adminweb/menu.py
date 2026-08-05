@@ -48,9 +48,11 @@ BANG_MENU: Final[tuple[MucMenu, ...]] = (
     # Khai `/user` ở đây thì một vai trò chỉ có `/user` sẽ thấy mục menu rồi bấm vào
     # nhận 404 — trông như panel hỏng.
     MucMenu("/nguoidung", "Người dùng", "nguoidung", "/users"),
-    MucMenu("/cauchu", "Câu chữ bot", "cauchu", "/noidung", sap_co=True),
-    MucMenu("/cauhinh", "Cấu hình", "cauhinh", "/cauhinh", sap_co=True),
-    MucMenu("/bantin", "Bắn tin", "bantin", "/broadcast", sap_co=True),
+    MucMenu("/cauchu", "Câu chữ bot", "cauchu", "/noidung"),
+    MucMenu("/cauhinh", "Cấu hình", "cauhinh", "/cauhinh"),
+    # Quyền là `/broadcast_status` chứ không `/broadcast`: màn này CHỈ xem tiến độ. Khai
+    # `/broadcast` là đòi quyền tạo đợt cho một trang không tạo được đợt nào.
+    MucMenu("/bantin", "Bắn tin", "bantin", "/broadcast_status"),
     MucMenu("/chiendich", "Chiến dịch", "chiendich", "/chiendich"),
     MucMenu("/baocao", "Báo cáo", "baocao", "/baocao"),
     MucMenu("/dinhdanh", "Tra định danh", "dinhdanh", "/checkip"),

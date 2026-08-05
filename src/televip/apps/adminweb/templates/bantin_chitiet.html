@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Đợt #{{ tt.job_id }}{% endblock %}
+
+{% block than %}
+
+<a href="/bantin" class="inline-flex items-center gap-1.5 mb-4 text-sm text-gray-500
+                         hover:text-gray-900 transition-colors">← Bắn tin</a>
+
+<div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Đợt #{{ tt.job_id }}</h1>
+    <p class="mt-1 text-gray-600">
+      {{ tt.kind }} · tệp {{ nhan_tep.get(tt.audience, tt.audience) }} ·
+      tạo {{ tt.created_at|giovn }}
+    </p>
+  </div>
+  <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium
+               {% if tt.state == 'running' %}bg-primary-100 text-primary-700
+               {% elif tt.state == 'done' %}bg-green-100 text-green-700
+               {% elif tt.state == 'cancelled' %}bg-red-100 text-red-700
+               {% elif tt.state == 'paused' %}bg-amber-100 text-amber-800
+               {% else %}bg-gray-100 text-gray-600{% endif %}">
+    {{ nhan_trang_thai.get(tt.state, tt.state) }}
+  </span>
+</div>
+
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Đã gửi</p>
+    <p class="mt-1 text-2xl font-bold text-gray-900">{{ tt.sent|vnd }}</p>
+    <p class="mt-1 text-xs text-gray-500">trên {{ tt.total|vnd }} đích</p>
+  </div>
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Còn lại</p>
+    <p class="mt-1 text-2xl font-bold text-primary-600">{{ tt.remaining|vnd }}</p>
+    <p class="mt-1 text-xs text-gray-500">
+      {{ tt.pending|vnd }} chưa bàn giao · {{ tt.waiting|vnd }} chờ gửi
+    </p>
+  </div>
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Hỏng</p>
+    <p class="mt-1 text-2xl font-bold {% if tt.failed %}text-red-600{% else %}text-gray-300{% endif %}">
+      {{ tt.failed|vnd }}
+    </p>
+    <p class="mt-1 text-xs text-gray-500">{{ tt.blocked|vnd }} đã chặn bot</p>
+  </div>
+  <div class="bg-white rounded-xl shadow p-5">
+    <p class="text-sm font-medium text-gray-600">Tốc độ</p>
+    {# Tốc độ chỉ có nghĩa khi đã bơm ít nhất một dòng. In "0 tin/giây" cho một đợt chưa
+       bắt đầu là bịa một con số đo được. #}
+    {% if tt.first_queued_at %}
+    <p class="mt-1 text-2xl font-bold text-gray-900">
+      {{ '%.1f'|format(tt.rate_per_second) }}
+    </p>
+    <p class="mt-1 text-xs text-gray-500">tin/giây</p>
+    {% else %}
+    <p class="mt-1 text-lg font-medium text-gray-300">Chưa bắt đầu</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
+  <div class="p-4 border-b border-gray-200">
+    <h2 class="font-medium text-gray-900">Chi tiết tệp đích</h2>
+  </div>
+  <div class="p-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-sm">
+    <div class="flex justify-between gap-4">
+      <span class="text-gray-600">Tổng đích</span>
+      <span class="tabular-nums text-gray-900">{{ tt.total|vnd }}</span>
+    </div>
+    <div class="flex justify-between gap-4">
+      <span class="text-gray-600">Chưa bàn giao</span>
+      <span class="tabular-nums text-gray-900">{{ tt.pending|vnd }}</span>
+    </div>
+    <div class="flex justify-between gap-4">
+      <span class="text-gray-600">Đã bàn giao</span>
+      <span class="tabular-nums text-gray-900">{{ tt.queued|vnd }}</span>
+    </div>
+    <div class="flex justify-between gap-4">
+      <span class="text-gray-600">Chờ gửi</span>
+      <span class="tabular-nums text-gray-900">{{ tt.waiting|vnd }}</span>
+    </div>
+    <div class="flex justify-between gap-4">
+      <span class="text-gray-600">Bỏ qua</span>
+      <span class="tabular-nums text-gray-900">{{ tt.skipped|vnd }}</span>
+    </div>
+    <div class="flex justify-between gap-4">
+      <span class="text-gray-600">Kết thúc lúc</span>
+      <span class="text-gray-900">{{ tt.finished_at|giovn }}</span>
+    </div>
+  </div>
+</div>
+
+{% if huy_duoc %}
+<div class="bg-white rounded-xl shadow-sm border border-red-200 overflow-hidden">
+  <div class="p-4 border-b border-red-100 bg-red-50">
+    <h2 class="font-medium text-red-900">Huỷ đợt này</h2>
+  </div>
+  <div class="p-4">
+    <p class="text-sm text-gray-600 leading-relaxed mb-4">
+      Huỷ sẽ bỏ qua {{ tt.remaining|vnd }} đích còn lại và xoá những tin chưa gửi khỏi hàng
+      đợi. <span class="font-medium text-gray-900">Tin đã bay thì không thu hồi được</span> —
+      xoá tin đã gửi là việc của job dọn tin, không phải của lệnh huỷ.
+    </p>
+    <form method="post" action="/bantin/{{ tt.job_id }}/huy">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <button type="submit"
+              class="inline-flex items-center rounded-lg px-5 py-2.5 font-medium text-white
+                     bg-red-600 transition-colors hover:bg-red-700 focus:outline-none
+                     focus:ring-2 focus:ring-red-500 focus:ring-offset-2">
+        Huỷ đợt #{{ tt.job_id }}
+      </button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<p class="mt-4 text-xs leading-relaxed text-gray-400">
+  Mọi con số ở đây đọc tại chỗ, không qua bộ nhớ đệm nào. Panel không tạm dừng và không
+  chạy tiếp được một đợt: hai thao tác đó chỉ đổi trạng thái mà không khởi động vòng gửi
+  nào, nên đợt sẽ trông như đang chạy trong khi không một tin nào bay.
+</p>
+
+{% endblock %}

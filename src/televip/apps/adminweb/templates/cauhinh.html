@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Cấu hình{% endblock %}
+
+{% block than %}
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold text-gray-900">Cấu hình</h1>
+  <p class="mt-2 text-gray-600">
+    {{ dong|length }} khoá · {{ so_khoa_ky }} khoá cần duyệt hai người.
+    Đổi xong có hiệu lực trên mọi worker trong tối đa {{ ttl }} giây.
+  </p>
+</div>
+
+<form method="get" action="/cauhinh" class="mb-6 flex flex-wrap gap-3">
+  <div class="flex-1 min-w-[240px]">
+    <label for="prefix" class="sr-only">Lọc theo tiền tố</label>
+    <input id="prefix" name="prefix" type="text" value="{{ prefix }}"
+           autocomplete="off" autocapitalize="none" spellcheck="false"
+           placeholder="Lọc theo tiền tố — ví dụ: event. · code. · referral."
+           class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm transition
+                  focus:outline-none focus:ring-2 focus:ring-primary-500
+                  focus:border-transparent">
+  </div>
+  <button type="submit"
+          class="inline-flex items-center rounded-lg font-medium transition-colors px-5 py-2
+                 bg-primary-600 text-white hover:bg-primary-700 focus:outline-none
+                 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">Lọc</button>
+  {% if prefix %}
+  <a href="/cauhinh" class="inline-flex items-center rounded-lg px-4 py-2 text-gray-600
+                            hover:bg-gray-100 transition-colors">Xoá</a>
+  {% endif %}
+</form>
+
+{% if not dong %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-10 text-center">
+  <div class="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-full
+              text-gray-400 mb-4">{{ ic.icon('cauhinh', 'w-7 h-7') }}</div>
+  <p class="font-medium text-gray-900">Không có khoá nào khớp tiền tố
+    “<bdi>{{ prefix }}</bdi>”</p>
+  <p class="mt-1 text-sm text-gray-500">
+    <a href="/cauhinh" class="text-primary-600 hover:underline">Bỏ lọc để xem toàn bộ</a>
+  </p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3">Khoá</th>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Kiểu</th>
+          <th class="text-left font-medium px-4 py-3">Giá trị</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Đổi lần cuối</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for d in dong %}
+        <tr class="hover:bg-gray-50 transition-colors">
+          <td class="px-4 py-3 max-w-xs">
+            <a href="/cauhinh/{{ d.key }}"
+               class="block font-mono text-primary-600 hover:underline break-all">{{ d.key }}</a>
+            <span class="block truncate text-xs text-gray-500"><bdi>{{ d.label_vi }}</bdi></span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <code class="px-1.5 py-0.5 bg-gray-100 rounded-md font-mono text-xs
+                         text-gray-600">{{ d.value_type }}</code>
+            {% if d.sensitive %}
+            <span class="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-[10px]
+                         font-medium bg-amber-100 text-amber-800"
+                  title="cần người duyệt thứ hai">🔒</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 max-w-md">
+            {# `d.value` là None với khoá bị che — giá trị thật không rời service. #}
+            <span class="block truncate font-mono text-gray-700">{% if d.bi_che %}{{ MASKED }}{% else %}{{ render(d.value, d.value_type) }}{% endif %}</span>
+          </td>
+          <td class="px-4 py-3 text-right text-gray-500 whitespace-nowrap">
+            {{ d.updated_at|giovn }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<p class="mt-4 text-xs leading-relaxed text-gray-400">
+  Khoá gắn 🔒 cần <span class="font-medium">người duyệt thứ hai</span> — chưa đổi được từ
+  panel, và cũng chưa đổi được bằng lệnh. Đó là hàng rào che mười khoá đắt nhất hệ thống,
+  gồm bảng tỉ lệ event, mệnh giá code tân thủ và trần ngân sách. Khoá có tên khớp mẫu bí mật
+  thì giá trị bị che ngay ở tầng đọc: nó không rời máy chủ.
+</p>
+
+{% endblock %}

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Câu chữ bot{% endblock %}
+
+{% block than %}
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold text-gray-900">Câu chữ bot</h1>
+  <p class="mt-2 text-gray-600">
+    {{ khoa|length }} khoá · {{ da_sua }} đã sửa khỏi bản mặc định.
+    Sửa xong có hiệu lực trên mọi worker trong tối đa {{ ttl }} giây.
+  </p>
+</div>
+
+<form method="get" action="/cauchu" class="mb-6 flex flex-wrap gap-3">
+  <div class="flex-1 min-w-[240px]">
+    <label for="prefix" class="sr-only">Lọc theo tiền tố</label>
+    <input id="prefix" name="prefix" type="text" value="{{ prefix }}"
+           autocomplete="off" autocapitalize="none" spellcheck="false"
+           placeholder="Lọc theo tiền tố — ví dụ: start. · checkin. · event."
+           class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm transition
+                  focus:outline-none focus:ring-2 focus:ring-primary-500
+                  focus:border-transparent">
+  </div>
+  <button type="submit"
+          class="inline-flex items-center rounded-lg font-medium transition-colors px-5 py-2
+                 bg-primary-600 text-white hover:bg-primary-700 focus:outline-none
+                 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">Lọc</button>
+  {% if prefix %}
+  <a href="/cauchu" class="inline-flex items-center rounded-lg px-4 py-2 text-gray-600
+                           hover:bg-gray-100 transition-colors">Xoá</a>
+  {% endif %}
+</form>
+
+{% if not khoa %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-10 text-center">
+  <div class="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-full
+              text-gray-400 mb-4">{{ ic.icon('cauchu', 'w-7 h-7') }}</div>
+  <p class="font-medium text-gray-900">Không có khoá nào khớp tiền tố
+    “<bdi>{{ prefix }}</bdi>”</p>
+  <p class="mt-1 text-sm text-gray-500">
+    <a href="/cauchu" class="text-primary-600 hover:underline">Bỏ lọc để xem toàn bộ</a>
+  </p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3">Khoá</th>
+          <th class="text-left font-medium px-4 py-3">Nội dung</th>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Trạng thái</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for k in khoa %}
+        <tr class="hover:bg-gray-50 transition-colors">
+          <td class="px-4 py-3 max-w-xs">
+            <a href="/cauchu/{{ k.key }}"
+               class="block font-mono text-primary-600 hover:underline break-all">{{ k.key }}</a>
+            <span class="block truncate text-xs text-gray-500"><bdi>{{ k.label_vi }}</bdi></span>
+          </td>
+          {# Nội dung là văn bản ADMIN tự gõ, nhiều dòng. Cắt bằng CSS chứ không cắt chuỗi:
+             cắt chuỗi giữa một biến `{ten}` sẽ hiện ra một cái tên biến cụt trông như lỗi. #}
+          <td class="px-4 py-3 max-w-md">
+            <span class="block truncate text-gray-600"><bdi>{{ k.content }}</bdi></span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            {% if k.customized %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-primary-100 text-primary-700">Đã sửa</span>
+            {% else %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium bg-gray-100 text-gray-600">Mặc định</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<p class="mt-4 text-xs leading-relaxed text-gray-400">
+  Danh sách hợp nhất hai nguồn: bảng đăng ký trong mã (tập khoá đầy đủ) và bảng dữ liệu
+  (bản đang chạy). Chỉ liệt kê từ bảng dữ liệu thì một khoá chưa seed sẽ vô hình — mà nó
+  vẫn đang được gửi cho người dùng mỗi ngày.
+</p>
+
+{% endblock %}

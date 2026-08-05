@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Bắn tin{% endblock %}
+
+{% block than %}
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold text-gray-900">Bắn tin</h1>
+  <p class="mt-2 text-gray-600">Xem các đợt và tiến độ. Tạo đợt và bấm gửi vẫn làm trong
+    bot — xem ghi chú cuối trang.</p>
+</div>
+
+{% if not dong %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-10 text-center">
+  <div class="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-full
+              text-gray-400 mb-4">{{ ic.icon('bantin', 'w-7 h-7') }}</div>
+  <p class="font-medium text-gray-900">Chưa có đợt bắn tin nào</p>
+  <p class="mt-1 text-sm text-gray-500">Tạo bằng
+    <code class="px-1.5 py-0.5 bg-gray-100 rounded-md font-mono">/broadcast</code> trong bot.</p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600">
+        <tr>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Đợt</th>
+          <th class="text-left font-medium px-4 py-3">Trạng thái</th>
+          <th class="text-left font-medium px-4 py-3 whitespace-nowrap">Tệp nhận</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Đã gửi</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Hỏng</th>
+          <th class="text-right font-medium px-4 py-3 whitespace-nowrap">Tạo lúc</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for d in dong %}
+        <tr class="hover:bg-gray-50 transition-colors">
+          <td class="px-4 py-3 whitespace-nowrap">
+            <a href="/bantin/{{ d.job_id }}"
+               class="font-mono font-medium text-primary-600 hover:underline">#{{ d.job_id }}</a>
+            <span class="block text-xs text-gray-400">{{ d.kind }}</span>
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs
+                         font-medium
+                         {% if d.state == 'running' %}bg-primary-100 text-primary-700
+                         {% elif d.state == 'done' %}bg-green-100 text-green-700
+                         {% elif d.state == 'cancelled' %}bg-red-100 text-red-700
+                         {% elif d.state == 'paused' %}bg-amber-100 text-amber-800
+                         {% else %}bg-gray-100 text-gray-600{% endif %}">
+              {{ nhan_trang_thai.get(d.state, d.state) }}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-gray-600">{{ nhan_tep.get(d.audience, d.audience) }}</td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-900 whitespace-nowrap">
+            {{ d.sent|vnd }} / {{ d.total|vnd }}
+          </td>
+          <td class="px-4 py-3 text-right tabular-nums whitespace-nowrap
+                     {% if d.failed %}text-red-600 font-medium{% else %}text-gray-300{% endif %}">
+            {{ d.failed|vnd }}
+          </td>
+          <td class="px-4 py-3 text-right text-gray-500 whitespace-nowrap">
+            {{ d.created_at|giovn }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if con_tro_sau %}
+<div class="mt-4 flex justify-end">
+  <a href="/bantin?truoc={{ con_tro_sau }}"
+     class="inline-flex items-center rounded-lg px-4 py-2 text-sm bg-white border
+            border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors">Trang sau →</a>
+</div>
+{% endif %}
+{% endif %}
+
+<p class="mt-4 text-xs leading-relaxed text-gray-400">
+  Panel <span class="font-medium">không tạo đợt và không bấm gửi</span>, và đó không phải
+  sự thận trọng — tiến trình web không giữ kết nối Telegram nào, nên nó không có gì để gửi
+  bằng. Một đợt lật sang “đang chạy” từ đây sẽ đứng im mà không có một dòng lỗi nào, cho
+  tới lần khởi động lại bot kế tiếp. Thao tác duy nhất panel làm được là
+  <span class="font-medium">huỷ</span> — hướng đóng van, và không cần vòng gửi nào.
+</p>
+
+{% endblock %}

@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}{{ d.key }}{% endblock %}
+
+{% block than %}
+
+<a href="/cauhinh" class="inline-flex items-center gap-1.5 mb-4 text-sm text-gray-500
+                          hover:text-gray-900 transition-colors">← Cấu hình</a>
+
+<div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+  <div class="min-w-0">
+    <h1 class="text-2xl font-bold text-gray-900 font-mono break-all">{{ d.key }}</h1>
+    <p class="mt-1 text-gray-600"><bdi>{{ d.label_vi }}</bdi></p>
+  </div>
+  <div class="flex flex-wrap gap-2">
+    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium
+                 bg-gray-100 text-gray-600 font-mono">{{ d.value_type }}</span>
+    {% if d.sensitive %}
+    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium
+                 bg-amber-100 text-amber-800">🔒 Cần duyệt hai người</span>
+    {% endif %}
+  </div>
+</div>
+
+{% if loi %}
+<div role="alert" class="mb-6 p-4 rounded-xl bg-red-50 border border-red-200">
+  <div class="flex items-start gap-3">
+    <span class="text-red-500 shrink-0 mt-0.5">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+    <div class="text-sm">
+      <p class="text-red-900 font-medium">Chưa đổi được</p>
+      <p class="mt-1 text-red-700"><bdi>{{ loi }}</bdi></p>
+      <p class="mt-1 text-red-600/80 text-xs">Giá trị hiện tại giữ nguyên.</p>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
+  <div class="p-4 border-b border-gray-200">
+    <h2 class="font-medium text-gray-900">Giá trị đang chạy</h2>
+  </div>
+  <div class="p-4">
+    {# Đầy đủ, KHÔNG cắt: sửa theo một bảng tỉ lệ đã bị cắt là đường thẳng tới một bảng
+       tỉ lệ sai. #}
+    <pre class="whitespace-pre-wrap break-all font-mono text-sm leading-relaxed
+                text-gray-800 bg-gray-50 rounded-lg p-3">{{ hien_tai }}</pre>
+    {% if d.min_value is not none or d.max_value is not none %}
+    <p class="mt-3 text-xs text-gray-500">
+      Khoảng hợp lệ:
+      <span class="font-mono">{{ d.min_value if d.min_value is not none else '−∞' }}</span>
+      →
+      <span class="font-mono">{{ d.max_value if d.max_value is not none else '+∞' }}</span>
+    </p>
+    {% endif %}
+    {% if d.updated_at %}
+    <p class="mt-1 text-xs text-gray-400">
+      Đổi lần cuối {{ d.updated_at|giovn }}{% if d.updated_by %} bởi
+      <a href="/nguoidung/{{ d.updated_by }}"
+         class="font-mono text-primary-600 hover:underline">{{ d.updated_by }}</a>{% endif %}.
+    </p>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Form đổi ─────────────────────────────────────────────────────
+   Khoá `sensitive` hoặc khoá bí mật thì KHÔNG dựng form. Đây không phải hàng rào — hàng
+   rào thật ném từ `settings_service._write()` kể cả khi có người gửi POST tay. Đây chỉ là
+   việc không dựng một cái nút chắc chắn thất bại. #}
+{% if d.sensitive %}
+<div class="bg-white rounded-xl shadow-sm border border-amber-200 p-6">
+  <div class="flex items-start gap-3">
+    <span class="text-amber-500 shrink-0 mt-0.5">{{ ic.icon('khoa', 'w-5 h-5') }}</span>
+    <div class="text-sm">
+      <p class="font-medium text-gray-900">Khoá này cần người duyệt thứ hai</p>
+      <p class="mt-1 text-gray-600 leading-relaxed">
+        Chưa đổi được từ panel, và cũng chưa đổi được bằng lệnh trong bot — luồng thu chữ ký
+        thứ hai chưa tồn tại. Hỏng theo hướng an toàn là chủ ý: đây là những khoá quyết định
+        xác suất trúng, mệnh giá và trần ngân sách.
+      </p>
+    </div>
+  </div>
+</div>
+{% elif d.bi_che %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+  <p class="text-sm text-gray-600">Khoá bí mật — giá trị không rời máy chủ, và không sửa
+    được từ panel.</p>
+</div>
+{% elif sua_duoc %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  <div class="p-4 border-b border-gray-200">
+    <h2 class="font-medium text-gray-900">Đổi giá trị</h2>
+  </div>
+  <form method="post" action="/cauhinh/{{ d.key }}" class="p-4 space-y-4">
+    <input type="hidden" name="_csrf" value="{{ csrf }}">
+    <div>
+      <label for="gia_tri" class="block text-sm font-medium text-gray-700 mb-1">
+        Giá trị mới
+      </label>
+      {% if d.value_type == 'bool' %}
+      <select id="gia_tri" name="gia_tri"
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm transition
+                     focus:outline-none focus:ring-2 focus:ring-primary-500
+                     focus:border-transparent">
+        <option value="true" {% if d.value %}selected{% endif %}>true</option>
+        <option value="false" {% if not d.value %}selected{% endif %}>false</option>
+      </select>
+      {% elif d.value_type == 'json' or d.value_type == 'string' %}
+      <textarea id="gia_tri" name="gia_tri" rows="8" spellcheck="false"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm font-mono
+                       text-sm transition focus:outline-none focus:ring-2
+                       focus:ring-primary-500 focus:border-transparent">{% if dang_go is not none %}{{ dang_go }}{% else %}{{ hien_tai }}{% endif %}</textarea>
+      {% else %}
+      <input id="gia_tri" name="gia_tri" type="text" inputmode="numeric" spellcheck="false"
+             value="{% if dang_go is not none %}{{ dang_go }}{% else %}{{ d.value }}{% endif %}"
+             class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm font-mono
+                    transition focus:outline-none focus:ring-2 focus:ring-primary-500
+                    focus:border-transparent">
+      {% endif %}
+      <p class="mt-1.5 text-xs text-gray-500">Cách gõ đúng: {{ goi_y }}</p>
+    </div>
+    <div class="flex flex-wrap items-center gap-3">
+      <button type="submit"
+              class="inline-flex items-center rounded-lg font-medium transition-colors
+                     px-6 py-2.5 bg-primary-600 text-white hover:bg-primary-700
+                     focus:outline-none focus:ring-2 focus:ring-primary-500
+                     focus:ring-offset-2">Đổi</button>
+      <span class="text-xs text-gray-500">
+        Hiệu lực trên mọi worker trong tối đa <span class="font-medium">{{ ttl }} giây</span>
+      </span>
+    </div>
+  </form>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+  <p class="text-sm text-gray-600">Bạn không có quyền
+    <code class="px-1.5 py-0.5 bg-gray-100 rounded-md font-mono">/setcauhinh</code>.</p>
+</div>
+{% endif %}
+
+<p class="mt-4 text-xs leading-relaxed text-gray-400">
+  Mỗi lần đổi ghi hai cuốn sổ trong cùng một giao dịch: <code class="font-mono">settings_audit</code>
+  (giá trị cũ → mới) và <code class="font-mono">audit_log</code> (kèm địa chỉ IP). Không có
+  đường nào đổi cấu hình mà không để lại dấu vết.
+</p>
+
+{% endblock %}
