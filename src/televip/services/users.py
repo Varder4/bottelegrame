@@ -22,6 +22,7 @@ from __future__ import annotations
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Final
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -361,3 +362,113 @@ def parse_referral_payload(payload: str | None) -> int | None:
         return None
     value = int(raw)
     return value if value > 0 else None
+
+
+# ── Khoá và gỡ khoá ─────────────────────────────────────────────────
+#
+# **KHÔNG BAO GIỜ `DELETE FROM users`.** Xoá một hàng người dùng làm thủng sổ cái —
+# `code_ledger` còn bút toán trỏ tới người không còn tồn tại — và xoá luôn bằng chứng điều
+# tra. Khoá là một hàng trong `user_bans`, và gỡ khoá là đặt `unbanned_at`, không phải xoá.
+#
+# Mọi khoá FK trỏ tới `users` đều dùng `ondelete=RESTRICT`, nên database cũng từ chối. Hàng
+# rào ở đây là để lời từ chối đến TRƯỚC, kèm một câu đọc được.
+
+#: Lý do mặc định khi người khoá không gõ gì. Một dòng `user_bans` không có lý do là một
+#: dòng mà sáu tháng sau không ai giải thích được.
+DEFAULT_BAN_REASON: Final = "Không ghi lý do"
+
+_SQL_BAN = """
+INSERT INTO user_bans (user_id, reason, banned_by, banned_at)
+     VALUES (:uid, :reason, :by, now())
+ON CONFLICT (user_id) DO UPDATE
+        SET reason     = EXCLUDED.reason,
+            banned_by  = EXCLUDED.banned_by,
+            banned_at  = now(),
+            unbanned_at = NULL
+RETURNING (xmax = 0) AS is_new
+"""
+
+_SQL_UNBAN = """
+UPDATE user_bans
+   SET unbanned_at = now()
+ WHERE user_id = :uid
+   AND unbanned_at IS NULL
+RETURNING reason
+"""
+
+
+class UserKhongTonTai(ValueError):
+    """Khoá một người chưa từng `/start`.
+
+    Không phải lỗi kỹ thuật mà là lỗi gõ nhầm id — và im lặng chấp nhận nó sẽ tạo ra một
+    dòng `user_bans` mồ côi mà không ai đối chiếu được với ai.
+    """
+
+    def __init__(self, user_id: int) -> None:
+        self.user_id = user_id
+        super().__init__(f"không có user {user_id} trong bảng users — người này chưa từng /start")
+
+
+@dataclass(frozen=True, slots=True)
+class KetQuaKhoa:
+    user_id: int
+    reason: str
+    #: True khi đây là lần khoá đầu tiên; False khi khoá lại một người từng bị khoá.
+    lan_dau: bool
+
+
+async def ban_user(
+    db: AsyncSession, *, user_id: int, reason: str, actor_id: int, ip: str | None = None
+) -> KetQuaKhoa:
+    """Khoá một tài khoản **và** ghi `audit_log`, trong CÙNG giao dịch của nơi gọi.
+
+    Ném:
+        UserKhongTonTai: id không có trong bảng `users`.
+    """
+    from televip.services.admin import user_exists, write_audit
+
+    if not await user_exists(db, user_id):
+        raise UserKhongTonTai(user_id)
+
+    ly_do = reason.strip() or DEFAULT_BAN_REASON
+    lan_dau = bool(
+        (
+            await db.execute(text(_SQL_BAN), {"uid": user_id, "reason": ly_do, "by": actor_id})
+        ).scalar_one()
+    )
+    await write_audit(
+        db,
+        actor_id=actor_id,
+        action="ban",
+        entity_type="user",
+        entity_id=str(user_id),
+        after={"reason": ly_do, "ip": ip},
+    )
+    log.info("khoa_tai_khoan", user_id=user_id, by=actor_id, lan_dau=lan_dau)
+    return KetQuaKhoa(user_id=user_id, reason=ly_do, lan_dau=lan_dau)
+
+
+async def unban_user(
+    db: AsyncSession, *, user_id: int, actor_id: int, ip: str | None = None
+) -> str | None:
+    """Gỡ khoá. Trả lý do khoá cũ, hoặc `None` nếu người này không đang bị khoá.
+
+    `None` là câu trả lời đúng cho lượt bấm thứ hai — không phải lỗi.
+    """
+    from televip.services.admin import write_audit
+
+    ly_do_cu = (await db.execute(text(_SQL_UNBAN), {"uid": user_id})).scalar_one_or_none()
+    if ly_do_cu is None:
+        return None
+
+    await write_audit(
+        db,
+        actor_id=actor_id,
+        action="unban",
+        entity_type="user",
+        entity_id=str(user_id),
+        before={"reason": ly_do_cu},
+        after={"ip": ip},
+    )
+    log.info("go_khoa_tai_khoan", user_id=user_id, by=actor_id)
+    return ly_do_cu

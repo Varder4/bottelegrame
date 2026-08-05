@@ -59,9 +59,11 @@ from televip.services.settings_service import (
     render_value,
 )
 
+# Nhập lại dưới TÊN CŨ: hai câu SQL và luật "không bao giờ DELETE FROM users" đã chuyển
+# sang service để panel web dùng chung.
 # `resolve_user` nhập lại dưới tên cũ: hai handler khác (`identity.py`, `share_event.py`)
 # đang nhập nó TỪ FILE NÀY. Đổi đường nhập của chúng là việc riêng, không lẫn vào đây.
-from televip.services.users import resolve_user
+from televip.services.users import DEFAULT_BAN_REASON, UserKhongTonTai, resolve_user
 
 log = get_logger(__name__)
 
@@ -479,27 +481,6 @@ async def cmd_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ── /ban · /unban ───────────────────────────────────────────────────
 
-DEFAULT_BAN_REASON: Final = "Không ghi lý do"
-
-_SQL_BAN = """
-INSERT INTO user_bans (user_id, reason, banned_by, banned_at)
-     VALUES (:uid, :reason, :by, now())
-ON CONFLICT (user_id) DO UPDATE
-        SET reason     = EXCLUDED.reason,
-            banned_by  = EXCLUDED.banned_by,
-            banned_at  = now(),
-            unbanned_at = NULL
-RETURNING (xmax = 0) AS is_new
-"""
-
-_SQL_UNBAN = """
-UPDATE user_bans
-   SET unbanned_at = now()
- WHERE user_id = :uid
-   AND unbanned_at IS NULL
-RETURNING reason
-"""
-
 
 @admin_command("/ban")
 async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -523,22 +504,10 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Giao dịch chỉ bọc phần chạm database. Gửi tin Telegram **bên ngoài**: một lời gọi
     # mạng nằm trong giao dịch giữ khoá hàng suốt thời gian chờ Telegram trả lời.
-    async with transaction() as db:
-        exists = await admin_service.user_exists(db, user_id)
-        if exists:
-            is_new = (
-                await db.execute(text(_SQL_BAN), {"uid": user_id, "reason": reason, "by": actor})
-            ).scalar_one()
-            await admin_service.write_audit(
-                db,
-                actor_id=actor,
-                action="ban",
-                entity_type="user",
-                entity_id=str(user_id),
-                after={"reason": reason},
-            )
-
-    if not exists:
+    try:
+        async with transaction() as db:
+            kq = await users_service.ban_user(db, user_id=user_id, reason=reason, actor_id=actor)
+    except UserKhongTonTai:
         await _reply(
             update,
             context,
@@ -546,7 +515,7 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    note = "" if is_new else "\nℹ️ Người này đã có hồ sơ khoá trước đó — hồ sơ được cập nhật."
+    note = "" if kq.lan_dau else "\nℹ️ Người này đã có hồ sơ khoá trước đó — hồ sơ được cập nhật."
     await _reply(
         update,
         context,
@@ -571,16 +540,7 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     actor = _actor_id(update)
     async with transaction() as db:
-        reason = (await db.execute(text(_SQL_UNBAN), {"uid": user_id})).scalar_one_or_none()
-        if reason is not None:
-            await admin_service.write_audit(
-                db,
-                actor_id=actor,
-                action="unban",
-                entity_type="user",
-                entity_id=str(user_id),
-                before={"reason": reason},
-            )
+        reason = await users_service.unban_user(db, user_id=user_id, actor_id=actor)
 
     if reason is None:
         await _reply(update, context, f"ℹ️ User {user_id} hiện không bị khoá.")

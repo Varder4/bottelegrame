@@ -27,12 +27,13 @@ from __future__ import annotations
 
 from typing import Annotated, Final
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from televip.apps.adminweb.deps import NguoiDung, can_quyen, khong_thay
+from televip.apps.adminweb.deps import NguoiDung, can_quyen, ip_cua, khong_thay, kiem_csrf
 from televip.apps.adminweb.menu import dung_menu
-from televip.db.engine import session
+from televip.db.engine import session, transaction
+from televip.services import admin as admin_service
 from televip.services import code_issuance
 from televip.services import users as users_service
 
@@ -149,8 +150,64 @@ async def ho_so(
             "hs": hs,
             "ma": ma,
             "nhan_trang_thai": NHAN_TRANG_THAI,
+            "khoa_duoc": await _duoc(nguoi, "/ban"),
+            "go_khoa_duoc": await _duoc(nguoi, "/unban"),
         },
     )
+
+
+async def _duoc(nguoi: NguoiDung, lenh: str) -> bool:
+    async with session() as db:
+        return await admin_service.can_run(db, nguoi.user_id, lenh)
+
+
+# ── Khoá và gỡ khoá ─────────────────────────────────────────────────
+#
+# Hai đường ghi. Luật "KHÔNG BAO GIỜ `DELETE FROM users`" nằm trong service, không ở đây:
+# panel không có nút xoá người dùng, và sẽ không bao giờ có.
+
+
+@router.post("/nguoidung/{user_id}/khoa")
+async def khoa(
+    request: Request,
+    user_id: str,
+    nguoi: Annotated[NguoiDung, Depends(kiem_csrf)],
+    _: Annotated[NguoiDung, Depends(can_quyen("/ban"))],
+    ly_do: Annotated[str, Form()] = "",
+) -> Response:
+    uid = _doc_user_id(user_id)
+    if uid is None:
+        raise khong_thay()
+    ip = await ip_cua(request)
+
+    try:
+        async with transaction() as db:
+            await users_service.ban_user(
+                db, user_id=uid, reason=ly_do, actor_id=nguoi.user_id, ip=ip
+            )
+    except users_service.UserKhongTonTai:
+        raise khong_thay() from None
+
+    return RedirectResponse(f"/nguoidung/{uid}", status_code=303)
+
+
+@router.post("/nguoidung/{user_id}/mo-khoa")
+async def mo_khoa(
+    request: Request,
+    user_id: str,
+    nguoi: Annotated[NguoiDung, Depends(kiem_csrf)],
+    _: Annotated[NguoiDung, Depends(can_quyen("/unban"))],
+) -> Response:
+    uid = _doc_user_id(user_id)
+    if uid is None:
+        raise khong_thay()
+    ip = await ip_cua(request)
+
+    async with transaction() as db:
+        # `None` nghĩa là người này không đang bị khoá — lượt bấm thứ hai, không phải lỗi.
+        await users_service.unban_user(db, user_id=uid, actor_id=nguoi.user_id, ip=ip)
+
+    return RedirectResponse(f"/nguoidung/{uid}", status_code=303)
 
 
 __all__ = ["NHAN_TRANG_THAI", "SO_DONG", "SO_MA_HIEN", "router"]

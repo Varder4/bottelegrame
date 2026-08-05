@@ -326,3 +326,141 @@ def test_route_web_khong_tu_viet_SQL() -> None:
         if "db.execute(" in noi_dung or "from sqlalchemy import text" in noi_dung:
             pham.append(p.name)
     assert pham == [], f"route tự viết SQL thay vì gọi services/: {pham}"
+
+
+# ── Khoá và gỡ khoá từ web ──────────────────────────────────────────
+
+
+async def _csrf() -> str:
+    from tests.test_adminweb import scalar
+
+    return await scalar(
+        "SELECT csrf_token FROM admin_sessions WHERE revoked_at IS NULL "
+        "ORDER BY created_at DESC LIMIT 1"
+    )
+
+
+async def _cap_quyen_khoa() -> None:
+    from televip.services import admin as admin_service
+
+    for lenh in ("/ban", "/unban"):
+        await run_sql(
+            "INSERT INTO admin_permissions (role, command) VALUES ('owner', :c) "
+            "ON CONFLICT DO NOTHING",
+            {"c": lenh},
+        )
+    admin_service.invalidate_role(OWNER_ID)
+
+
+@pytest.mark.asyncio
+async def test_khoa_va_go_khoa_tu_web(app_client: httpx.AsyncClient):
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _dung_admin()
+    await _cap_quyen_khoa()
+    await _dung_nguoi_thuong()
+    await _dang_nhap(app_client)
+    csrf = await _csrf()
+
+    r = await app_client.post(
+        f"/nguoidung/{NGUOI_THUONG}/khoa",
+        data={"ly_do": "gian lận mời bạn", "_csrf": csrf},
+        headers=_goc(),
+    )
+    assert r.status_code == 303
+    assert (
+        await scalar(
+            "SELECT reason FROM user_bans WHERE user_id = :u AND unbanned_at IS NULL",
+            {"u": NGUOI_THUONG},
+        )
+        == "gian lận mời bạn"
+    )
+    # Dòng `users` KHÔNG bị xoá — đó là luật, không phải chi tiết.
+    assert await scalar("SELECT count(*) FROM users WHERE user_id = :u", {"u": NGUOI_THUONG}) == 1
+    assert (
+        await scalar(
+            "SELECT after->>'ip' FROM audit_log WHERE action = 'ban' AND entity_id = :u",
+            {"u": str(NGUOI_THUONG)},
+        )
+        == "127.0.0.1"
+    )
+
+    hs = (await app_client.get(f"/nguoidung/{NGUOI_THUONG}")).text
+    assert "Đang bị khoá" in hs
+    assert "Gỡ khoá tài khoản" in hs, "đang khoá thì phải có nút gỡ"
+    assert "Khoá tài khoản" not in hs.split("Gỡ khoá")[0], "không dựng cả hai nút cùng lúc"
+
+    r = await app_client.post(
+        f"/nguoidung/{NGUOI_THUONG}/mo-khoa", data={"_csrf": csrf}, headers=_goc()
+    )
+    assert r.status_code == 303
+    assert (
+        await scalar(
+            "SELECT count(*) FROM user_bans WHERE user_id = :u AND unbanned_at IS NULL",
+            {"u": NGUOI_THUONG},
+        )
+        == 0
+    )
+    # Hồ sơ khoá vẫn còn để tra cứu.
+    assert (
+        await scalar("SELECT count(*) FROM user_bans WHERE user_id = :u", {"u": NGUOI_THUONG}) == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_khoa_khong_co_csrf_thi_404(app_client: httpx.AsyncClient):
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _dung_admin()
+    await _cap_quyen_khoa()
+    await _dung_nguoi_thuong()
+    await _dang_nhap(app_client)
+
+    r = await app_client.post(
+        f"/nguoidung/{NGUOI_THUONG}/khoa", data={"ly_do": "x"}, headers=_goc()
+    )
+    assert r.status_code == 404
+    assert (
+        await scalar("SELECT count(*) FROM user_bans WHERE user_id = :u", {"u": NGUOI_THUONG}) == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_khong_co_quyen_ban_thi_khong_co_nut_va_POST_bi_chan(app_client: httpx.AsyncClient):
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _dung_admin()  # `_LENH` KHÔNG có /ban
+    await _dung_nguoi_thuong()
+    await _dang_nhap(app_client)
+    csrf = await _csrf()
+
+    assert "Khoá tài khoản" not in (await app_client.get(f"/nguoidung/{NGUOI_THUONG}")).text
+
+    r = await app_client.post(
+        f"/nguoidung/{NGUOI_THUONG}/khoa", data={"ly_do": "x", "_csrf": csrf}, headers=_goc()
+    )
+    assert r.status_code == 404
+    assert (
+        await scalar("SELECT count(*) FROM user_bans WHERE user_id = :u", {"u": NGUOI_THUONG}) == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_khoa_nguoi_chua_tung_start_thi_404(app_client: httpx.AsyncClient):
+    """Gõ nhầm id sẽ tạo một dòng `user_bans` mồ côi không đối chiếu được với ai."""
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _dung_admin()
+    await _cap_quyen_khoa()
+    await _dang_nhap(app_client)
+    csrf = await _csrf()
+
+    r = await app_client.post(
+        "/nguoidung/888888888/khoa", data={"ly_do": "x", "_csrf": csrf}, headers=_goc()
+    )
+    assert r.status_code == 404
+    assert await scalar("SELECT count(*) FROM user_bans") == 0
