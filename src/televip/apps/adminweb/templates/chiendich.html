@@ -6,14 +6,21 @@
 
 <div class="mb-6">
   <h1 class="text-3xl font-bold text-gray-900">Chiến dịch mời bạn</h1>
-  <p class="mt-2 text-gray-600">Xem trạng thái. Bắt đầu / gia hạn / dừng vẫn làm trong bot —
-    xem ghi chú cuối trang.</p>
+  <p class="mt-2 text-gray-600">Mở, gia hạn và dừng chiến dịch mời bạn.</p>
 </div>
 
+{% if loi %}
+<div role="alert" class="mb-6 p-4 rounded-xl bg-red-50 border border-red-200">
+  <div class="flex items-start gap-3">
+    <span class="text-red-500 shrink-0 mt-0.5">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+    <p class="text-sm text-red-800"><bdi>{{ loi }}</bdi></p>
+  </div>
+</div>
+{% endif %}
+
 {# ── Cảnh báo chiến dịch "bật mà vô hình" ────────────────────────────
-   Đây là con số duy nhất trên màn hình này mà người vận hành phải hành động ngay.
    `campaign_window()` chỉ đọc DÒNG MỚI NHẤT thoả điều kiện, nên một dòng cũ còn cờ
-   `is_active` sẽ nằm đó mà không màn hình nào nói ra. #}
+   `is_active` nằm đó mà không màn hình nào khác nói ra. #}
 {% if mo_coi %}
 <div role="alert" class="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-200">
   <div class="flex items-start gap-3">
@@ -24,8 +31,8 @@
       <p class="mt-1 text-amber-700 leading-relaxed">
         Cờ <code class="font-mono">is_active</code> vẫn bật nhưng chưa tới ngày bắt đầu,
         hoặc đã quá hạn kết thúc. Hệ thống chỉ đọc chiến dịch mới nhất, nên những dòng này
-        không hiện ở đâu khác. Dừng hẳn bằng <code class="font-mono">/chiendich end</code>
-        trong bot.
+        không hiện ở đâu khác. Nút <span class="font-medium">Dừng tất cả</span> bên dưới
+        tắt hết, kể cả những dòng này.
       </p>
     </div>
   </div>
@@ -122,12 +129,105 @@
 </div>
 {% endif %}
 
+{# ── Ba nút điều khiển ───────────────────────────────────────────── #}
+<div class="mt-6 grid gap-6 lg:grid-cols-2">
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+    <div class="p-4 border-b border-gray-200">
+      <h2 class="font-medium text-gray-900">
+        {% if cua_so.is_running %}Gia hạn chiến dịch đang chạy{% else %}Mở chiến dịch{% endif %}
+      </h2>
+    </div>
+
+    {% if cua_so.is_running %}
+    <form method="post" action="/chiendich/giahan" class="p-4 space-y-4">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <div>
+        <label for="gh_ngay" class="block text-sm font-medium text-gray-700 mb-1">
+          Thêm bao nhiêu ngày
+        </label>
+        <input id="gh_ngay" name="so_ngay" type="text" inputmode="numeric" value="7"
+               class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm font-mono
+                      transition focus:outline-none focus:ring-2 focus:ring-primary-500
+                      focus:border-transparent">
+        <p class="mt-1.5 text-xs text-gray-500">
+          Từ 1 đến {{ max_days }} ngày. Cộng dồn từ <span class="font-medium">hạn cũ</span>,
+          không tính từ bây giờ — gia hạn 7 ngày cho chiến dịch còn 3 ngày ra 10 ngày.
+        </p>
+      </div>
+      <button type="submit"
+              class="inline-flex items-center rounded-lg font-medium transition-colors
+                     px-5 py-2.5 bg-primary-600 text-white hover:bg-primary-700
+                     focus:outline-none focus:ring-2 focus:ring-primary-500
+                     focus:ring-offset-2">Gia hạn</button>
+    </form>
+    {% else %}
+    <form method="post" action="/chiendich/mo" class="p-4 space-y-4">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <div>
+        <label for="mo_ten" class="block text-sm font-medium text-gray-700 mb-1">Tên</label>
+        <input id="mo_ten" name="ten" type="text" maxlength="100"
+               placeholder="Chiến dịch mời bạn"
+               class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm transition
+                      focus:outline-none focus:ring-2 focus:ring-primary-500
+                      focus:border-transparent">
+      </div>
+      <div>
+        <label for="mo_ngay" class="block text-sm font-medium text-gray-700 mb-1">
+          Chạy bao nhiêu ngày
+        </label>
+        <input id="mo_ngay" name="so_ngay" type="text" inputmode="numeric" value="30"
+               class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm font-mono
+                      transition focus:outline-none focus:ring-2 focus:ring-primary-500
+                      focus:border-transparent">
+        <p class="mt-1.5 text-xs text-gray-500">Từ 1 đến {{ max_days }} ngày.</p>
+      </div>
+      {# Hệ quả phải đứng NGAY CẠNH nút, không ở một trang trợ giúp. #}
+      <div class="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs
+                  leading-relaxed text-amber-900">
+        Mở chiến dịch là <span class="font-medium">mở van tiền</span>: từ lúc bấm, bot bắt
+        đầu phát thưởng mỗi {{ tham_so.interval_people }} người mời =
+        {{ tham_so.reward_value_vnd|vnd }}đ, tối đa {{ tham_so.max_claims }} lần mỗi người.
+        {% if mo_coi %}Mọi chiến dịch còn bật sẽ bị dừng trước.{% endif %}
+      </div>
+      <button type="submit"
+              class="inline-flex items-center rounded-lg font-medium transition-colors
+                     px-5 py-2.5 bg-primary-600 text-white hover:bg-primary-700
+                     focus:outline-none focus:ring-2 focus:ring-primary-500
+                     focus:ring-offset-2">Mở chiến dịch</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-red-200 overflow-hidden">
+    <div class="p-4 border-b border-red-100 bg-red-50">
+      <h2 class="font-medium text-red-900">Dừng</h2>
+    </div>
+    <div class="p-4">
+      <p class="text-sm text-gray-600 leading-relaxed mb-4">
+        Dừng <span class="font-medium">mọi</span> chiến dịch đang bật, kể cả những cái “bật
+        mà không chạy”. Sau đó bot không phát mốc mời bạn nào nữa — người dùng vẫn mời được
+        và vẫn được tính là đã mời, chỉ là không nhận thưởng.
+      </p>
+      <form method="post" action="/chiendich/dung">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button type="submit"
+                class="inline-flex items-center rounded-lg px-5 py-2.5 font-medium text-white
+                       bg-red-600 transition-colors hover:bg-red-700 focus:outline-none
+                       focus:ring-2 focus:ring-red-500 focus:ring-offset-2">
+          Dừng tất cả
+        </button>
+      </form>
+    </div>
+  </div>
+
+</div>
+
 <p class="mt-4 text-xs leading-relaxed text-gray-400">
-  Màn hình này <span class="font-medium">chỉ đọc</span>. Bắt đầu, gia hạn và dừng vẫn làm
-  bằng <code class="font-mono">/chiendich</code> trong bot: ba thao tác đó cần một khoá
-  cấp database và một thứ tự bắt buộc (khoá → kết thúc mọi chiến dịch đang bật → mở cái
-  mới). Dựng đường thứ hai mà chép hụt thứ tự đó là hai dòng cùng bật, và dòng cũ vẫn phát
-  thưởng sau khi người vận hành đã đọc “đã dừng”.
+  Ba thao tác trên đi qua <span class="font-medium">cùng một hàm</span> mà lệnh
+  <code class="font-mono">/chiendich</code> trong bot gọi — không có bản sao nào. Thứ tự bắt
+  buộc (khoá → dừng mọi chiến dịch đang bật → mở cái mới) nằm trong service, vì chép hụt nó
+  là hai dòng cùng bật và dòng cũ vẫn phát thưởng sau khi bạn đã đọc “đã dừng”.
 </p>
 
 {% endblock %}

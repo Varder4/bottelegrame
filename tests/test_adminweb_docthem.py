@@ -293,3 +293,171 @@ async def test_thieu_quyen_thi_404_o_ca_bon_man(app_client: httpx.AsyncClient):
     trang = (await app_client.get("/")).text
     for duong in ("/baocao", "/dinhdanh", "/nhatky", "/chiendich"):
         assert f'href="{duong}"' not in trang, duong
+
+
+# ── Chiến dịch: ba đường ghi ────────────────────────────────────────
+
+
+async def _csrf_moi() -> str:
+    from tests.test_adminweb import scalar
+
+    return await scalar(
+        "SELECT csrf_token FROM admin_sessions WHERE revoked_at IS NULL "
+        "ORDER BY created_at DESC LIMIT 1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mo_chien_dich_tu_web(app_client: httpx.AsyncClient):
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _vao(app_client)
+    csrf = await _csrf_moi()
+
+    r = await app_client.post(
+        "/chiendich/mo", data={"so_ngay": "30", "ten": "He ruc ro", "_csrf": csrf}, headers=_goc()
+    )
+    assert r.status_code == 303
+    assert await scalar("SELECT count(*) FROM campaigns WHERE is_active") == 1
+    assert (
+        await scalar("SELECT name FROM campaigns ORDER BY campaign_id DESC LIMIT 1") == "He ruc ro"
+    )
+    assert (
+        await scalar("SELECT after->>'ip' FROM audit_log WHERE action = 'chiendich_start'")
+        == "127.0.0.1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mo_cai_moi_DUNG_moi_cai_dang_bat(app_client: httpx.AsyncClient):
+    """Thứ tự bắt buộc: khoá → dừng mọi cái đang bật → mở cái mới.
+
+    Hai dòng cùng `is_active` là dòng cũ thành "bật nhưng vô hình" — nó vẫn phát thưởng
+    sau khi người vận hành đã đọc "đã dừng".
+    """
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _vao(app_client)
+    csrf = await _csrf_moi()
+    # Một chiến dịch cũ còn bật, chèn thẳng như một dòng sót lại.
+    await run_sql(
+        "INSERT INTO campaigns (code, name, interval_people, reward_value_vnd, max_claims, "
+        "is_active, starts_at, ends_at) VALUES ('cu', 'Cu', 3, 10000, 5, true, "
+        "now() - interval '10 days', now() + interval '10 days')"
+    )
+
+    await app_client.post(
+        "/chiendich/mo", data={"so_ngay": "30", "ten": "Moi", "_csrf": csrf}, headers=_goc()
+    )
+    assert await scalar("SELECT count(*) FROM campaigns WHERE is_active") == 1, (
+        "chỉ ĐÚNG MỘT chiến dịch được bật sau khi mở cái mới"
+    )
+    assert await scalar("SELECT name FROM campaigns WHERE is_active") == "Moi"
+
+
+@pytest.mark.asyncio
+async def test_gia_han_cong_don_tu_han_CU(app_client: httpx.AsyncClient):
+    """Gia hạn 7 ngày cho chiến dịch còn 3 ngày phải ra 10 ngày.
+
+    Tính từ `now()` là âm thầm CẮT NGẮN 3 ngày đang có.
+    """
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _vao(app_client)
+    csrf = await _csrf_moi()
+    await run_sql(
+        "INSERT INTO campaigns (code, name, interval_people, reward_value_vnd, max_claims, "
+        "is_active, starts_at, ends_at) VALUES ('c1', 'C1', 3, 10000, 5, true, "
+        "now() - interval '1 day', now() + interval '3 days')"
+    )
+
+    r = await app_client.post(
+        "/chiendich/giahan", data={"so_ngay": "7", "_csrf": csrf}, headers=_goc()
+    )
+    assert r.status_code == 303
+    con_lai = await scalar(
+        "SELECT round(EXTRACT(EPOCH FROM (ends_at - now())) / 86400) FROM campaigns "
+        "WHERE code = 'c1'"
+    )
+    assert int(con_lai) == 10, f"phải ra 10 ngày, đang là {con_lai}"
+
+
+@pytest.mark.asyncio
+async def test_gia_han_khi_khong_co_cai_nao_dang_chay_thi_TU_CHOI(app_client: httpx.AsyncClient):
+    """Gia hạn một cửa sổ đã đóng chính là MỞ LẠI van tiền — hai việc phải nhìn khác nhau."""
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _vao(app_client)
+    csrf = await _csrf_moi()
+
+    # Một chiến dịch ĐÃ HẾT HẠN nhưng cờ `is_active` vẫn bật — trạng thái có thật, và là
+    # cái bẫy: nếu truy vấn "đang chạy" quên điều kiện `ends_at > now()` thì lệnh gia hạn
+    # sẽ kéo dài chính nó, tức MỞ LẠI van tiền mà không ai bấm nút mở.
+    await run_sql(
+        "INSERT INTO campaigns (code, name, interval_people, reward_value_vnd, max_claims, "
+        "is_active, starts_at, ends_at) VALUES ('hethan', 'Het han', 3, 10000, 5, true, "
+        "now() - interval '40 days', now() - interval '10 days')"
+    )
+    han_cu = await scalar("SELECT ends_at FROM campaigns WHERE code = 'hethan'")
+
+    r = await app_client.post(
+        "/chiendich/giahan", data={"so_ngay": "7", "_csrf": csrf}, headers=_goc()
+    )
+    assert r.status_code == 200, "phải trả lại trang kèm lý do, không phải 303"
+    assert "mở lại van tiền" in r.text
+    assert await scalar("SELECT ends_at FROM campaigns WHERE code = 'hethan'") == han_cu, (
+        "chiến dịch đã hết hạn KHÔNG được gia hạn — đó là mở lại van tiền"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dung_tat_MOI_cai_dang_bat(app_client: httpx.AsyncClient):
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _vao(app_client)
+    csrf = await _csrf_moi()
+    for ma in ("a", "b", "c"):
+        await run_sql(
+            "INSERT INTO campaigns (code, name, interval_people, reward_value_vnd, max_claims, "
+            "is_active, starts_at, ends_at) VALUES (:m, :m, 3, 10000, 5, true, "
+            "now() - interval '1 day', now() + interval '5 days')",
+            {"m": ma},
+        )
+
+    r = await app_client.post("/chiendich/dung", data={"_csrf": csrf}, headers=_goc())
+    assert r.status_code == 303
+    assert await scalar("SELECT count(*) FROM campaigns WHERE is_active") == 0, (
+        "phải dừng MỌI cái đang bật, không chỉ cái mới nhất"
+    )
+
+
+@pytest.mark.asyncio
+async def test_so_ngay_la_bi_tu_choi(app_client: httpx.AsyncClient):
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _vao(app_client)
+    csrf = await _csrf_moi()
+
+    for xau in ("0", "-5", "9999", "ba", "²", ""):
+        r = await app_client.post(
+            "/chiendich/mo", data={"so_ngay": xau, "_csrf": csrf}, headers=_goc()
+        )
+        assert r.status_code == 200, xau
+    assert await scalar("SELECT count(*) FROM campaigns") == 0
+
+
+@pytest.mark.asyncio
+async def test_mo_chien_dich_khong_co_csrf_thi_404(app_client: httpx.AsyncClient):
+    from tests.test_adminweb import scalar
+    from tests.test_adminweb_ghi import _goc
+
+    await _vao(app_client)
+    r = await app_client.post("/chiendich/mo", data={"so_ngay": "30"}, headers=_goc())
+    assert r.status_code == 404
+    assert await scalar("SELECT count(*) FROM campaigns") == 0
