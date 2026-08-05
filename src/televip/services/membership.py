@@ -127,6 +127,55 @@ SELECT r.chat_id,
 """
 
 
+#: Đánh dấu một kênh bắt buộc là không tra được. `health` vốn có sẵn trong bảng nhưng
+#: **chưa nơi nào ghi vào** — nên nó luôn là 'healthy' kể cả khi kênh đã chết.
+#:
+#: Giá trị là 'degraded' chứ không phải 'unhealthy': `ck_required_chats_health` chỉ cho
+#: ba giá trị healthy · degraded · unknown.
+_SQL_DANH_DAU_HONG = """
+UPDATE required_chats
+   SET health = 'degraded', checked_at = now()
+ WHERE chat_id = :cid
+   AND health <> 'degraded'
+"""
+
+#: Ngược lại: tra được thì trả về 'healthy'. Không có câu này thì một kênh từng hỏng sẽ
+#: mang cờ đỏ vĩnh viễn, và cờ đỏ vĩnh viễn là cờ không ai nhìn nữa.
+_SQL_DANH_DAU_LANH = """
+UPDATE required_chats
+   SET health = 'healthy', checked_at = now()
+ WHERE chat_id = :cid
+   AND health <> 'healthy'
+"""
+
+
+async def _danh_dau_hong(db: AsyncSession, chat_id: int, ly_do: str) -> None:
+    await db.execute(text(_SQL_DANH_DAU_HONG), {"cid": chat_id})
+    log.error("kenh_bat_buoc_hong", chat_id=chat_id, ly_do=ly_do[:200])
+
+
+async def _danh_dau_lanh(db: AsyncSession, chat_id: int) -> None:
+    await db.execute(text(_SQL_DANH_DAU_LANH), {"cid": chat_id})
+
+
+_SQL_KENH_HONG = """
+SELECT chat_id, title, invite_link, checked_at
+  FROM required_chats
+ WHERE is_active AND health <> 'healthy'
+ ORDER BY sort_order, chat_id
+"""
+
+
+async def unhealthy_chats(db: AsyncSession) -> list[Row[Any]]:
+    """Kênh bắt buộc đang bật mà bot KHÔNG đọc được thành viên.
+
+    Cờ này bật nghĩa là **không ai nhận được code nào**: `check_membership()` fail-closed
+    khi không tra được, nên mọi người dùng chỉ thấy "hệ thống đang bận". Nguyên nhân gần
+    như luôn là bot chưa được làm quản trị viên trong kênh đó.
+    """
+    return list((await db.execute(text(_SQL_KENH_HONG))).all())
+
+
 async def check_membership(
     db: AsyncSession,
     bot: ChatMemberFetcher,
@@ -179,6 +228,15 @@ async def check_membership(
                     user_id=user_id,
                     detail=str(answer),
                 )
+                # Đánh dấu kênh này HỎNG để người vận hành nhìn thấy. Nguyên nhân gần như
+                # luôn là "bot chưa được làm admin trong kênh" — Telegram trả
+                # `member list is inaccessible`, và không có nó thì bot không đọc được ai
+                # đã vào. Trước đây triệu chứng duy nhất là mọi người dùng đều nhận "hệ
+                # thống đang bận", còn lý do chỉ nằm trong log của tiến trình bot.
+                #
+                # Ghi ở đây chứ không ở một job riêng vì đây là nơi DUY NHẤT phát hiện
+                # được: một job quét định kỳ sẽ nói cùng một câu, muộn hơn.
+                await _danh_dau_hong(db, row.chat_id, str(answer))
                 raise MembershipUnavailable(row.chat_id) from answer
             # Có bản ghi cũ: dùng tạm còn hơn từ chối oan. Ghi log để đo `fallback_rate`.
             log.warning(
@@ -196,6 +254,7 @@ async def check_membership(
 
         status = answer.status
         is_member = member_flag(answer)
+        await _danh_dau_lanh(db, row.chat_id)
         await record_membership_event(
             db,
             user_id=user_id,

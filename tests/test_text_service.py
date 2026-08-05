@@ -298,7 +298,16 @@ SAME_AS_TEXTS: list[tuple[str, dict[str, Any], str]] = [
         {"game_link": "https://game"},
         domain_texts.tanthu_already_claimed("https://game"),
     ),
-    ("tanthu.missing_groups", {"joined": 1, "total": 3}, domain_texts.missing_groups(1, 3)),
+    (
+        "tanthu.missing_groups",
+        {
+            "joined": 1,
+            "total": 3,
+            "con_thieu": 2,
+            "missing_list": "1️⃣ https://t.me/a\n2️⃣ https://t.me/b",
+        },
+        domain_texts.missing_groups(1, 3, ["https://t.me/a", "https://t.me/b"]),
+    ),
     (
         "code.delivered",
         {"code_value": "TV-9", "value_vnd": 88_000},

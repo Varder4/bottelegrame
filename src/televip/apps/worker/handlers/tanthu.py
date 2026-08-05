@@ -186,9 +186,25 @@ async def handle_check_groups(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if missing:
+        # Nói ĐÚNG nhóm nào còn thiếu. `check_membership` trả về `chat_id`, còn thứ người
+        # dùng bấm được là link mời — nên phải nối lại qua `required_chats`. Đọc theo đúng
+        # `sort_order` để danh sách này khớp thứ tự người ta vừa thấy ở màn BƯỚC 2.
+        async with session() as db:
+            chats = await membership.required_chats(db)
+        thieu = {int(c) for c in missing}
+        link_thieu = [row.invite_link for row in chats if row.chat_id in thieu]
+
         await sender.send_message(
             chat.id,
-            await text_service.render("tanthu.missing_groups", joined=joined, total=total),
+            await text_service.render(
+                "tanthu.missing_groups",
+                joined=joined,
+                total=total,
+                con_thieu=len(link_thieu),
+                missing_list=texts.numbered_links(link_thieu),
+            ),
+            # Gắn lại nút để người dùng bấm ngay tại tin này, không phải cuộn lên tìm.
+            reply_markup=keyboards.check_groups_keyboard(),
         )
         return
 

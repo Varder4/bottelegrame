@@ -284,20 +284,31 @@ def not_verified_retry_tanthu() -> str:
     )
 
 
-def missing_groups(joined: int, total: int) -> str:
-    """Chưa tham gia đủ nhóm.
+def missing_groups(joined: int, total: int, missing_links: Sequence[str] = ()) -> str:
+    """Chưa tham gia đủ nhóm — liệt kê ĐÚNG những nhóm còn thiếu.
+
+    Bản trước chỉ in tiến độ rồi bảo "tham gia đủ các nhóm/kênh phía trên". Câu đó bắt
+    người dùng cuộn ngược lên tìm một tin cũ, rồi tự đối chiếu 5 kênh xem mình sót cái nào
+    — và với người vào từ `/start` thì tin đó có thể đã trôi khá xa. Bot BIẾT chính xác
+    thiếu cái nào, nên nó phải nói ra.
 
     Bỏ câu "đợi 15 giây" của bản cũ: trạng thái lấy từ sự kiện `chat_member` nên cập nhật
     gần như tức thì, lời khuyên đó thành lời khuyên sai.
     """
-    return (
-        "❌ Bạn chưa tham gia đủ nhóm/kênh!\n"
-        "\n"
-        f"📊 Tiến độ: {joined}/{total}\n"
-        "\n"
-        "Hãy tham gia đủ các nhóm/kênh phía trên nhé!\n"
-        "Sau đó bấm lại để nhận thưởng nhé! 🎁"
-    )
+    con_thieu = len(missing_links)
+    lines = [
+        "❌ Bạn chưa tham gia đủ nhóm/kênh!",
+        "",
+        f"📊 Tiến độ: {joined}/{total}",
+        "",
+    ]
+    if missing_links:
+        lines.append(f"👉 Còn thiếu {con_thieu} nhóm/kênh sau:")
+        lines.append("")
+        lines.append(numbered_links(missing_links))
+        lines.append("")
+    lines.append("Tham gia xong bấm lại nút bên dưới để nhận thưởng nhé! 🎁")
+    return "\n".join(lines)
 
 
 def code_delivered(code_value: str, value_vnd: int) -> str:

@@ -167,6 +167,11 @@ async def set_setting(key: str, value: Any, value_type: str = "string") -> None:
     settings_service.invalidate()
 
 
+def _link(chat_id: int) -> str:
+    """Link mời của một nhóm test — khớp với `add_required_chat`."""
+    return f"https://t.me/nhom{abs(chat_id)}"
+
+
 async def add_required_chat(chat_id: int, *, sort_order: int = 0, health: str = "healthy") -> int:
     await run_sql(
         """
@@ -327,7 +332,9 @@ async def test_thieu_nhom_thi_khong_cap_code(wired):
 
     assert await count_grants(uid) == 0
     assert await used_codes() == 0
-    assert sender.last == texts.missing_groups(1, 2)
+    assert sender.last == texts.missing_groups(1, 2, [_link(chat_ids[1])])
+    assert _link(chat_ids[1]) in sender.last, "phải chỉ ĐÚNG nhóm còn thiếu"
+    assert _link(chat_ids[0]) not in sender.last, "nhóm đã vào không được liệt kê"
     assert bot.calls == [(chat_ids[1], uid)], "chỉ nhóm THIẾU bản ghi mới được hỏi Telegram"
 
 
@@ -343,7 +350,7 @@ async def test_roi_nhom_thi_mat_quyen(wired):
     bot = FakeBot()
     await tanthu.handle_check_groups(make_update(uid, callback=True), make_context(sender, bot))
 
-    assert sender.last == texts.missing_groups(0, 1)
+    assert sender.last == texts.missing_groups(0, 1, [_link(chat_ids[0])])
     assert bot.calls == []
     assert await count_grants(uid) == 0
 
@@ -516,7 +523,7 @@ async def test_restricted_khong_tinh_khi_khong_con_la_thanh_vien(wired):
     bot = FakeBot({chat_ids[0]: "restricted"})
     await tanthu.handle_check_groups(make_update(uid, callback=True), make_context(sender, bot))
 
-    assert sender.last == texts.missing_groups(0, 1)
+    assert sender.last == texts.missing_groups(0, 1, [_link(chat_ids[0])])
     assert await count_grants(uid) == 0
 
     async with db_session() as s:

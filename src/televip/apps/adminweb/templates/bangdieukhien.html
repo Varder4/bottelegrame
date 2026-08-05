@@ -12,6 +12,43 @@
   </p>
 </div>
 
+{# ── Kênh bắt buộc hỏng ──────────────────────────────────────────────
+   Cờ đỏ, đặt TRÊN cảnh báo kho: khi nó bật thì không ai nhận được code nào, mọi người dùng
+   chỉ thấy "hệ thống đang bận". Không gác theo quyền — đây là thứ ai vào panel cũng cần
+   biết ngay. #}
+{% if kenh_hong %}
+<div class="mb-6 p-4 rounded-xl bg-rose-50 border-2 border-rose-300">
+  <div class="flex items-start gap-3">
+    <span class="text-rose-600 mt-0.5">{{ ic.icon('canhbao', 'w-6 h-6') }}</span>
+    <div class="flex-1">
+      <p class="font-semibold text-rose-900">
+        {{ kenh_hong|length }} kênh bắt buộc đang lỗi — KHÔNG AI nhận được code
+      </p>
+      <p class="mt-1 text-sm text-rose-800">
+        Bot không đọc được danh sách thành viên của những kênh dưới đây, nên không xác nhận
+        được ai đã tham gia. Mọi người dùng bấm nhận code đều chỉ thấy
+        <em>“Hệ thống đang bận”</em>.
+      </p>
+      <ul class="mt-3 space-y-1.5">
+        {% for k in kenh_hong %}
+        <li class="text-sm">
+          <span class="font-medium text-rose-900">{{ k.title }}</span>
+          <a href="{{ k.invite_link }}" class="ml-2 text-rose-700 underline"
+             rel="noopener noreferrer" target="_blank">{{ k.invite_link }}</a>
+          <span class="ml-2 text-xs text-rose-500 tabular-nums">{{ k.chat_id }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="mt-3 text-sm text-rose-800">
+        <strong>Cách sửa:</strong> thêm bot làm <strong>quản trị viên</strong> trong từng
+        kênh trên. Không cần quyền đăng bài — chỉ cần là admin thì Telegram mới cho bot đọc
+        danh sách thành viên.
+      </p>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {# ── Cảnh báo kho ────────────────────────────────────────────────────
    Chỉ hiện với người có quyền `/tonkho`, và chỉ khi thật sự có mệnh giá dưới ngưỡng.
    Một dải cảnh báo luôn hiện là một dải không ai đọc. #}

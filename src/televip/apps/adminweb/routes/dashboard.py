@@ -27,8 +27,8 @@ from televip.apps.adminweb.deps import phien_hien_tai
 from televip.apps.adminweb.menu import dung_menu
 from televip.db.engine import session, transaction
 from televip.services import admin as admin_service
+from televip.services import membership, stock
 from televip.services import stats as stats_service
-from televip.services import stock
 
 router = APIRouter()
 
@@ -76,6 +76,13 @@ async def bang_dieu_khien(request: Request) -> Response:
         # dưới ngưỡng. Bảng đầy đủ nằm ở `/kho`.
         canh_bao_kho = {"low_count": tong.low_count, "nguong": nguong, "con_lai": tong.available}
 
+    # Kênh bắt buộc mà bot KHÔNG đọc được thành viên. Hiện cho mọi người đăng nhập được,
+    # không gác theo quyền: khi cờ này bật thì **không ai nhận được code nào** — mọi người
+    # dùng chỉ thấy "hệ thống đang bận", còn lý do trước đây chỉ nằm trong log tiến trình
+    # bot. Đây là thứ hỏng nặng nhất mà panel có thể im lặng về.
+    async with session() as db:
+        kenh_hong = await membership.unhealthy_chats(db)
+
     from televip.apps.adminweb.app import templates
 
     return templates.TemplateResponse(
@@ -90,6 +97,7 @@ async def bang_dieu_khien(request: Request) -> Response:
             "anh_chup": anh_chup,
             "da_xac_minh": da_xac_minh,
             "canh_bao_kho": canh_bao_kho,
+            "kenh_hong": kenh_hong,
         },
     )
 

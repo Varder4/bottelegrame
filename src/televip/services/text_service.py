@@ -323,9 +323,17 @@ _SPECS: Final[tuple[TemplateSpec, ...]] = (
     _spec(
         "tanthu.missing_groups",
         "Chưa vào đủ nhóm",
-        _tmpl(texts.missing_groups(111, 222), ("111", "{joined}"), ("222", "{total}")),
+        _tmpl(
+            texts.missing_groups(111, 222, ["__THIEU__"]),
+            ("111", "{joined}"),
+            ("222", "{total}"),
+            ("Còn thiếu 1 nhóm/kênh sau:", "Còn thiếu {con_thieu} nhóm/kênh sau:"),
+            ("1️⃣ __THIEU__", "{missing_list}"),
+        ),
         joined=1,
         total=2,
+        con_thieu=1,
+        missing_list="1️⃣ https://t.me/vidu",
     ),
     _spec(
         "code.delivered",
