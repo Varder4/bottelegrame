@@ -38,7 +38,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -471,6 +471,582 @@ async def revoke_bulk(db: AsyncSession, *, code_type: str, value_vnd: int = 0) -
         text(_SQL_REVOKE_BULK), {"code_type": code_type, "value_vnd": value_vnd}
     )
     return list(rows.all())
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Nghiệp vụ thu hồi
+# ══════════════════════════════════════════════════════════════════════
+#
+# Hai hàm nguyên thuỷ ở trên chỉ biết một câu `UPDATE`. Mọi hàng rào quyết định *có được
+# thu hồi hay không* vốn nằm trong `handlers/admin/codes.py` — tức chỉ tồn tại trên đường
+# vào Telegram. Panel web là đường vào thứ hai, và thu hồi là thao tác **huỷ nghĩa vụ**:
+# một câu lệnh chạm được cả nghìn mã.
+#
+# Khuôn giống hệt nạp kho (`services/stock.py`): một hàm KIỂM trả về một kiểu, và một hàm
+# GHI **chỉ nhận kiểu đó**. Không đường vào nào ghi thẳng được, kể cả một script chạy tay.
+#
+# ## Hai chỗ khác hành vi cũ, và cả hai chống GÕ NHẦM chứ không chống kẻ xấu
+#
+# Panel chỉ có người trong nhà dùng, nên ở đây không dựng lớp nào để chặn kẻ tấn công. Cái
+# thật sự xảy ra là người vận hành bấm một cái nút đã cũ:
+#
+# 1. **Cái sắp xoá không được LỚN HƠN cái đã nhìn thấy.** Bản cũ chỉ *cảnh báo* khi lệch,
+#    và cảnh báo đó in ra SAU khi đã xoá. Kịch bản đời thường: mở trang xác nhận lúc kho
+#    có 1 mã, để đó đi nạp thêm 200 mã, quay lại bấm — xoá sạch 200 mã vừa nạp.
+#
+# 2. **Vé nhớ cả TIỀN, không chỉ số mã.** 10 mã 5.000đ và 10 mã 88.000đ có cùng số mã, nên
+#    canh lệch bằng số mã thì 880.000đ biến mất mà không dòng nào kêu.
+#
+# ## Một luật về giao dịch mà nơi gọi PHẢI giữ
+#
+# `thu_hoi_hang_loat()` ném ngoại lệ **sau** câu `UPDATE` (nó đo trên chính tập
+# `RETURNING`). Nên `try/except` của nơi gọi phải nằm **NGOÀI** `async with transaction()`.
+# Bắt bên trong thì giao dịch vẫn commit: mã đã `revoked`, sổ không ghi, màn hình báo "từ
+# chối" — đúng nghĩa sổ cái lệch với bảng `codes`.
+
+MENH_GIA_TAT_CA: Final = "__tatca__"
+"""Sentinel TƯỜNG MINH cho "mọi mệnh giá".
+
+Chuỗi rỗng **không bao giờ** mang nghĩa này. `Form()` của FastAPI đưa `""` chứ không đưa
+`None`, nên `menh_gia or None` sẽ biến một ô bị trình duyệt khôi phục về rỗng thành phạm
+vi rộng nhất có thể — đạt được bằng cách KHÔNG LÀM GÌ. Sự khác nhau giữa "một mệnh giá" và
+"TẤT CẢ" không được phép là sự khác nhau giữa có chữ và không có chữ.
+"""
+
+#: Vé đề nghị thu hồi hàng loạt. Giữ nguyên tiền tố và TTL mà bot đang chạy — vé dùng
+#: CHUNG giữa hai đường vào, nên mở đề nghị trên web cũng làm chết cái nút cũ còn nằm
+#: trong lịch sử chat Telegram.
+DE_NGHI_PREFIX: Final = "dac:"
+DE_NGHI_TTL_SECONDS: Final = 300
+
+#: Khoá "mỗi người tối đa MỘT đề nghị sống" — chống chính mình mở ba tab rồi chỉ nhớ một.
+DE_NGHI_CHU_PREFIX: Final = "dac:chu:"
+
+
+class ThuHoiBiTuChoi(ValueError):
+    """Không thu hồi được. `args[0]` là câu hiện thẳng cho người vận hành.
+
+    Mọi lớp con mang FIELD có kiểu để tầng trình bày tự viết câu chữ — cùng khuôn với
+    `stock.NapKhoBiTuChoi`. Hai tầng nhờ đó có đúng một hình dạng bắt lỗi.
+    """
+
+
+# — thu hồi một mã —
+
+
+class NhieuHonMotMa(ThuHoiBiTuChoi):
+    """Ô nhập chứa nhiều hơn một mã — nói ra thay vì im lặng xoá cái đầu tiên."""
+
+    def __init__(self, *, so_token: int) -> None:
+        self.so_token = so_token
+        super().__init__(
+            f"Ô này nhận đúng MỘT mã, bạn đưa vào {so_token}. "
+            f"Muốn thu hồi nhiều mã thì dùng ô thu hồi hàng loạt bên dưới."
+        )
+
+
+class KhongTimThayMa(ThuHoiBiTuChoi):
+    def __init__(self, *, code_value: str) -> None:
+        self.code_value = code_value
+        super().__init__(f"Không tìm thấy code: {code_value}")
+
+
+class MaDaPhat(ThuHoiBiTuChoi):
+    """Mã đã vào sổ cái. Thu hồi là một BÚT TOÁN NGƯỢC, không phải một lần xoá dòng."""
+
+    def __init__(
+        self,
+        *,
+        code_value: str,
+        code_type: str,
+        value_vnd: int,
+        holder_id: int,
+        holder_username: str | None,
+        holder_name: str | None,
+        grant_state: str,
+        moc: datetime | None,
+    ) -> None:
+        self.code_value = code_value
+        self.code_type = code_type
+        self.value_vnd = value_vnd
+        self.holder_id = holder_id
+        self.holder_username = holder_username
+        self.holder_name = holder_name
+        self.grant_state = grant_state
+        self.moc = moc
+        super().__init__(f"Code {code_value} đã phát cho {holder_id}, không xoá được.")
+
+
+class MaDaThuHoi(ThuHoiBiTuChoi):
+    def __init__(self, *, code_value: str) -> None:
+        self.code_value = code_value
+        super().__init__(f"Code {code_value} đã bị thu hồi trước đó.")
+
+
+class MatCuocDua(ThuHoiBiTuChoi):
+    """`UPDATE` sửa 0 dòng: mã rời trạng thái `available` giữa lượt đọc và lượt ghi.
+
+    Điều kiện `status = 'available'` trong chính câu `UPDATE` mới là thứ chặn, không phải
+    câu `if` phía trên nó.
+    """
+
+    def __init__(self, *, code_value: str) -> None:
+        self.code_value = code_value
+        super().__init__(f"Code {code_value} vừa được một luồng khác giữ chỗ. Không thu hồi được.")
+
+
+# — thu hồi hàng loạt —
+
+
+class LoaiKhongHopLe(ThuHoiBiTuChoi):
+    def __init__(self, *, code_type_tho: str) -> None:
+        self.code_type_tho = code_type_tho
+        super().__init__(f"Loại code không hợp lệ: {code_type_tho}")
+
+
+class MenhGiaKhongDocDuoc(ThuHoiBiTuChoi):
+    def __init__(self, *, menh_gia_tho: str) -> None:
+        self.menh_gia_tho = menh_gia_tho
+        super().__init__(f"Mệnh giá không hợp lệ: {menh_gia_tho}")
+
+
+class PhamViRong(ThuHoiBiTuChoi):
+    def __init__(self, *, code_type: str, value_vnd: int) -> None:
+        self.code_type = code_type
+        self.value_vnd = value_vnd
+        super().__init__(f"Không có mã CHƯA PHÁT nào khớp phạm vi: {code_type}")
+
+
+class VuotNguongThuHoi(ThuHoiBiTuChoi):
+    """Phạm vi vượt ngưỡng duyệt hai người.
+
+    Cố ý **không** kế thừa `stock.VuotNguongDuyetHaiNguoi`: cái đó là con của
+    `NapKhoBiTuChoi`, và một route thu hồi bắt `NapKhoBiTuChoi` là câu lệnh vô nghĩa. Hai
+    miền dùng chung **hằng số khoá cấu hình**, không dùng chung cây ngoại lệ.
+    """
+
+    def __init__(self, *, tong_vnd: int, threshold_vnd: int, so_ma: int) -> None:
+        self.tong_vnd = tong_vnd
+        self.threshold_vnd = threshold_vnd
+        self.so_ma = so_ma
+        super().__init__(
+            f"Phạm vi này trị giá {tong_vnd} đ ({so_ma} mã), vượt ngưỡng cần duyệt hai "
+            f"người là {threshold_vnd} đ"
+        )
+
+
+class PhamViDaLonLen(ThuHoiBiTuChoi):
+    """Cái sắp bị xoá LỚN HƠN cái con người đã nhìn thấy — về số mã hoặc về tiền.
+
+    Kho vơi đi giữa hai bước là bình thường (có người vừa nhận mã) và được dung thứ: nói ra
+    con số thật là đủ. Kho LỚN LÊN thì không: người vận hành duyệt một phạm vi, và cái được
+    thi hành phải không rộng hơn cái đã duyệt.
+    """
+
+    def __init__(
+        self, *, so_ma_da_hien: int, so_ma_thuc: int, tong_vnd_da_hien: int, tong_vnd_thuc: int
+    ) -> None:
+        self.so_ma_da_hien = so_ma_da_hien
+        self.so_ma_thuc = so_ma_thuc
+        self.tong_vnd_da_hien = tong_vnd_da_hien
+        self.tong_vnd_thuc = tong_vnd_thuc
+        super().__init__(
+            f"Phạm vi đã lớn lên trong lúc chờ: lúc xem thử {so_ma_da_hien} mã / "
+            f"{tong_vnd_da_hien} đ, bây giờ {so_ma_thuc} mã / {tong_vnd_thuc} đ"
+        )
+
+
+class DeNghiHetHan(ThuHoiBiTuChoi):
+    """Vé hết hạn, đã bấm, hoặc bị một đề nghị mới của cùng người ghi đè."""
+
+    def __init__(self) -> None:
+        super().__init__("Đề nghị thu hồi này đã đóng — không mã nào bị đụng tới.")
+
+
+class DeNghiCuaNguoiKhac(ThuHoiBiTuChoi):
+    """Vé có thật nhưng thuộc người khác. Kiểm TRƯỚC khi tiêu, để không đốt vé của họ."""
+
+    def __init__(self) -> None:
+        super().__init__("Đây là đề nghị thu hồi của người khác — chỉ người tạo mới dùng được.")
+
+
+@dataclass(frozen=True, slots=True)
+class MaChoThuHoi:
+    """Một mã đã qua đủ hàng rào ĐỌC. Chỉ `kiem_ma_thu_hoi()` dựng được."""
+
+    code_id: int
+    #: Lấy từ DÒNG DỮ LIỆU, không từ tham số. Chuỗi đi vào sổ kiểm toán phải đến từ
+    #: database, không đến từ ô nhập — nếu không thì sổ ghi lại cái người ta GÕ, và một
+    #: ký tự thừa ở đó biến bằng chứng thành thứ không tra cứu được.
+    code_value: str
+    code_type: str
+    value_vnd: int
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class PhamViThuHoi:
+    """Phạm vi đã qua đủ hàng rào ở bước ĐỀ NGHỊ, kèm con số đã đếm tại thời điểm kiểm."""
+
+    code_type: str
+    #: `0` = không lọc mệnh giá. Dùng số thay `None` để cùng một tham số đi qua được cả SQL
+    #: lẫn payload của vé mà không cần hai đường mã hoá.
+    value_vnd: int
+    so_ma: int
+    tong_vnd: int
+    threshold_vnd: int
+
+
+@dataclass(frozen=True, slots=True)
+class DeNghiThuHoi:
+    """Nội dung một vé ĐÃ TIÊU. Chỉ `nhan_de_nghi_thu_hoi()` dựng được, và hàm đó chỉ dựng
+    được sau một `GETDEL` thành công.
+
+    Mang HAI con số "đã hiện" — số mã VÀ tổng tiền — vì có hai loại số khác nhau:
+
+    * số **quyết định** (có được xoá không, xoá bao nhiêu) → phải đếm lại;
+    * số **người ta đã nhìn** → phải là chính nó, đếm lại là mất nó.
+
+    Gộp hai loại làm một là cách 880.000đ biến mất mà không dòng nào kêu.
+    """
+
+    actor_id: int
+    code_type: str
+    value_vnd: int
+    so_ma_da_hien: int
+    tong_vnd_da_hien: int
+
+
+@dataclass(frozen=True, slots=True)
+class KetQuaThuHoiHangLoat:
+    #: Từ `RETURNING`, KHÔNG phải số đã hiện trên trang xác nhận.
+    so_ma_da_xoa: int
+    tong_vnd: int
+    so_ma_da_hien: int
+    tong_vnd_da_hien: int
+
+    @property
+    def lech(self) -> bool:
+        return self.so_ma_da_xoa != self.so_ma_da_hien or self.tong_vnd != self.tong_vnd_da_hien
+
+
+_SQL_FIND_CODE = """
+SELECT c.code_id,
+       c.code_value,
+       c.status,
+       c.code_type,
+       c.value_vnd,
+       g.grant_id,
+       g.state     AS grant_state,
+       g.user_id   AS holder_id,
+       u.username  AS holder_username,
+       u.full_name AS holder_name,
+       coalesce(g.delivered_at, g.created_at) AS moc
+  FROM codes c
+  LEFT JOIN code_grants g ON g.code_id = c.code_id
+  LEFT JOIN users u ON u.user_id = g.user_id
+ WHERE c.code_value = :code
+"""
+
+_SQL_COUNT_AVAILABLE = """
+SELECT count(*)::int                        AS so_ma,
+       coalesce(sum(value_vnd), 0)::bigint  AS tong_vnd
+  FROM codes
+ WHERE code_type = :code_type
+   AND status = 'available'
+   AND (:value_vnd = 0 OR value_vnd = :value_vnd)
+"""
+
+
+async def kiem_ma_thu_hoi(db: AsyncSession, *, code_value: str) -> MaChoThuHoi:
+    """Bốn hàng rào ĐỌC của việc thu hồi một mã, đúng thứ tự bot đang chạy.
+
+    Ném:
+        NhieuHonMotMa: ô nhập chứa nhiều hơn một mã.
+        KhongTimThayMa · MaDaPhat · MaDaThuHoi.
+
+    Tra bằng **đúng cái token đã đếm**, không bằng chuỗi thô: một ô `<textarea>` gửi lên
+    `"ABC123\\r\\n"` — vẫn là một mã — nhưng `WHERE code_value = 'ABC123\\r\\n'` không khớp
+    dòng nào, và người vận hành nhận "không tìm thấy" cho một mã CÓ THẬT. Hỏng theo hướng
+    đóng, nhưng đó đúng là câu trả lời sai đẩy người ta quay ra gõ tay lệnh hàng loạt với
+    phạm vi rộng hơn.
+
+    Không `.lower()`: `uq_codes_value` unique trên chuỗi nguyên bản và mã phân biệt hoa
+    thường. `.one_or_none()` chứ không `.first()`: nhiều dòng là dữ liệu hỏng và phải NỔ.
+    """
+    token = code_value.split()
+    if len(token) != 1:
+        raise NhieuHonMotMa(so_token=len(token))
+
+    row = (await db.execute(text(_SQL_FIND_CODE), {"code": token[0]})).one_or_none()
+    if row is None:
+        raise KhongTimThayMa(code_value=token[0])
+
+    if row.grant_id is not None:
+        raise MaDaPhat(
+            code_value=row.code_value,
+            code_type=row.code_type,
+            value_vnd=row.value_vnd,
+            holder_id=row.holder_id,
+            holder_username=row.holder_username,
+            holder_name=row.holder_name,
+            grant_state=row.grant_state,
+            moc=row.moc,
+        )
+
+    if row.status == "revoked":
+        raise MaDaThuHoi(code_value=row.code_value)
+
+    return MaChoThuHoi(
+        code_id=row.code_id,
+        code_value=row.code_value,
+        code_type=row.code_type,
+        value_vnd=row.value_vnd,
+        status=row.status,
+    )
+
+
+async def thu_hoi_mot(
+    db: AsyncSession, ma: MaChoThuHoi, *, actor_id: int, ip: str | None = None
+) -> int:
+    """Thu hồi một mã đã qua `kiem_ma_thu_hoi()`. Gọi trong `transaction()`. Trả `code_id`.
+
+    Nhận `MaChoThuHoi` chứ không nhận `code_id: int` — chặn bằng KIỂU, cùng cách
+    `stock.nap()` chỉ nhận `LoNapKho`.
+
+    `revoke_one()` trả `None` → `MatCuocDua`, và sổ **không** được ghi: điều kiện
+    `status = 'available'` trong chính câu `UPDATE` mới là thứ chặn, nên khi nó sửa 0 dòng
+    thì không có việc gì đã xảy ra để mà ghi.
+    """
+    from televip.services import admin as admin_service
+
+    if await revoke_one(db, code_id=ma.code_id) is None:
+        raise MatCuocDua(code_value=ma.code_value)
+
+    await admin_service.write_audit(
+        db,
+        actor_id=actor_id,
+        action="del_code",
+        entity_type="code",
+        entity_id=str(ma.code_id),
+        before={"code_value": ma.code_value, "status": ma.status},
+        after={"code_value": ma.code_value, "status": "revoked", "ip": ip},
+    )
+    return ma.code_id
+
+
+# ── Thu hồi hàng loạt: đề nghị → vé → thi hành ──────────────────────
+
+
+async def kiem_pham_vi_thu_hoi(
+    db: AsyncSession, *, code_type_tho: str, menh_gia_tho: str
+) -> PhamViThuHoi:
+    """Bốn hàng rào của bước ĐỀ NGHỊ, đúng thứ tự bot đang chạy.
+
+    ``menh_gia_tho`` là `str`, **không** phải `str | None`: xem `MENH_GIA_TAT_CA`.
+
+    Ném:
+        LoaiKhongHopLe · MenhGiaKhongDocDuoc · PhamViRong · VuotNguongThuHoi.
+    """
+    from televip.db.models.codes import CODE_TYPES
+    from televip.services import settings_service
+    from televip.services.stock import DEFAULT_DUAL_APPROVAL_VND, DUAL_APPROVAL_KEY, doc_menh_gia
+
+    code_type = code_type_tho.strip().lower()
+    if code_type not in CODE_TYPES:
+        raise LoaiKhongHopLe(code_type_tho=code_type_tho)
+
+    if menh_gia_tho == MENH_GIA_TAT_CA:
+        value_vnd = 0
+    else:
+        doc = doc_menh_gia(menh_gia_tho) if menh_gia_tho.strip() else None
+        if doc is None:
+            raise MenhGiaKhongDocDuoc(menh_gia_tho=menh_gia_tho)
+        value_vnd = doc
+
+    row = (
+        await db.execute(
+            text(_SQL_COUNT_AVAILABLE), {"code_type": code_type, "value_vnd": value_vnd}
+        )
+    ).one()
+    if row.so_ma == 0:
+        raise PhamViRong(code_type=code_type, value_vnd=value_vnd)
+
+    threshold = await settings_service.get_int(DUAL_APPROVAL_KEY, DEFAULT_DUAL_APPROVAL_VND, db=db)
+    if row.tong_vnd > threshold:
+        raise VuotNguongThuHoi(tong_vnd=row.tong_vnd, threshold_vnd=threshold, so_ma=row.so_ma)
+
+    return PhamViThuHoi(
+        code_type=code_type,
+        value_vnd=value_vnd,
+        so_ma=row.so_ma,
+        tong_vnd=row.tong_vnd,
+        threshold_vnd=threshold,
+    )
+
+
+def _khoa_ve(ve: str) -> str:
+    return f"{DE_NGHI_PREFIX}{ve}"
+
+
+def _khoa_chu(actor_id: int) -> str:
+    return f"{DE_NGHI_CHU_PREFIX}{actor_id}"
+
+
+async def tao_de_nghi_thu_hoi(
+    db: AsyncSession, *, actor_id: int, pham_vi: PhamViThuHoi, ip: str | None = None
+) -> str:
+    """Phát một vé dùng MỘT LẦN cho phạm vi này. Gọi trong `transaction()`. Trả chuỗi vé.
+
+    ## Vì sao là vé, chứ không phải phạm vi nhét vào nút / vào trường ẩn
+
+    Bản trước của lệnh Telegram nhét thẳng phạm vi vào `callback_data`, nên cái nút là một
+    **mệnh lệnh vĩnh viễn** chứ không phải một quyết định: tin nhắn sống mãi trong lịch sử
+    chat, và bấm lại nó vài ngày sau chạy `UPDATE` trên kho của HÔM NAY. Kịch bản đã dựng
+    lại được: đề nghị lúc kho có 1 mã 5.000đ → hôm sau nạp 200 mã 88.000đ → cuộn lên bấm
+    nút cũ thì thu hồi sạch 17.605.000đ.
+
+    Bản web của đúng chuyện đó là một trường ẩn `loai=event` nằm lại trong tab cũ. Nên
+    trang xác nhận **chỉ** mang vé, và phạm vi đọc từ vé.
+
+    Vé mới của một người **giết** vé cũ của chính người đó: ba tab mở ba đề nghị là ba lần
+    bấm mà người ta chỉ nhớ một.
+    """
+    import secrets
+
+    from televip.cache.client import get_redis
+    from televip.services import admin as admin_service
+
+    # Vào sổ TRƯỚC khi chạm Redis: hỏng ở Redis thì giao dịch cuộn lại, không còn vé cũng
+    # không còn dòng sổ. Cần dòng này vì khi kho bị xoá nhầm, câu hỏi đầu tiên là "lúc bấm
+    # màn hình nói bao nhiêu mã" — và chỉ dòng này trả lời được.
+    await admin_service.write_audit(
+        db,
+        actor_id=actor_id,
+        action="del_all_code.denghi",
+        entity_type="codes",
+        entity_id=f"{pham_vi.code_type}:{pham_vi.value_vnd or 'all'}",
+        after={"so_ma": pham_vi.so_ma, "tong_vnd": pham_vi.tong_vnd, "ip": ip},
+    )
+
+    ve = secrets.token_urlsafe(8)
+    redis = get_redis()
+    cu = await redis.getset(_khoa_chu(actor_id), ve.encode())
+    if cu is not None:
+        await redis.delete(_khoa_ve(cu.decode() if isinstance(cu, bytes) else str(cu)))
+    await redis.expire(_khoa_chu(actor_id), DE_NGHI_TTL_SECONDS)
+    await redis.set(
+        _khoa_ve(ve),
+        json.dumps(
+            {
+                "actor_id": actor_id,
+                "code_type": pham_vi.code_type,
+                "value_vnd": pham_vi.value_vnd,
+                "so_ma_da_hien": pham_vi.so_ma,
+                "tong_vnd_da_hien": pham_vi.tong_vnd,
+            }
+        ).encode(),
+        ex=DE_NGHI_TTL_SECONDS,
+    )
+    return ve
+
+
+async def nhan_de_nghi_thu_hoi(*, ve: str, actor_id: int) -> DeNghiThuHoi:
+    """Tiêu vé. Ném `DeNghiHetHan` (hết hạn / đã bấm) hoặc `DeNghiCuaNguoiKhac`.
+
+    `GETDEL` là một lệnh nguyên tử, nên hai lượt bấm đồng thời chỉ một lượt đi qua được —
+    đó là toàn bộ cơ chế chống bấm hai lần, kể cả F5 và nút Back.
+    """
+    from televip.cache.client import get_redis
+
+    redis = get_redis()
+    tho = await redis.getdel(_khoa_ve(ve))
+    if tho is None:
+        raise DeNghiHetHan
+    try:
+        du_lieu = dict(json.loads(tho))
+    except (ValueError, TypeError) as exc:
+        raise DeNghiHetHan from exc
+    if int(du_lieu.get("actor_id", 0)) != actor_id:
+        raise DeNghiCuaNguoiKhac
+
+    await redis.delete(_khoa_chu(actor_id))
+    return DeNghiThuHoi(
+        actor_id=actor_id,
+        code_type=str(du_lieu["code_type"]),
+        value_vnd=int(du_lieu["value_vnd"]),
+        so_ma_da_hien=int(du_lieu["so_ma_da_hien"]),
+        tong_vnd_da_hien=int(du_lieu["tong_vnd_da_hien"]),
+    )
+
+
+async def thu_hoi_hang_loat(
+    db: AsyncSession, de_nghi: DeNghiThuHoi, *, ip: str | None = None
+) -> KetQuaThuHoiHangLoat:
+    """Thi hành một đề nghị ĐÃ TIÊU VÉ. Gọi trong `transaction()`.
+
+    Chỉ nhận `DeNghiThuHoi` — kiểu mà chỉ một `GETDEL` thành công dựng ra được. Nên không
+    có đường tắt nào từ "vừa xem thử xong" thẳng tới "đã xoá", và `so_ma_da_hien` không
+    phải một tham số tuỳ ý: nó là con số duy nhất ghi lại **con người đã duyệt cái gì**.
+
+    ## Hàng rào tiền đo trên chính tập `RETURNING`
+
+    Đếm bằng một câu `count(*)` rồi `UPDATE` ở câu sau là **hai ảnh chụp** — engine không
+    đặt `isolation_level` nên giao dịch chạy ở `READ COMMITTED`, và khe giữa hai câu không
+    đóng được bằng cách đếm thêm lần nữa. Thứ duy nhất ràng buộc được một `UPDATE` là một
+    vị từ nằm trong chính nó, hoặc một phép đo trên đúng cái nó vừa sửa.
+
+    Nên thứ tự ở đây là: `UPDATE … RETURNING` → đo trên tập trả về → ném nếu vượt. Ngoại lệ
+    ném **sau** khi đã ghi, nên nơi gọi **phải** đặt `try/except` NGOÀI `transaction()` để
+    giao dịch cuộn lại. Bắt bên trong thì mã đã `revoked` mà màn hình báo "từ chối".
+
+    Ném:
+        VuotNguongThuHoi: trần bị hạ xuống trong lúc chờ, hoặc kho vượt trần.
+        PhamViDaLonLen: cái sắp xoá lớn hơn cái đã duyệt.
+    """
+    from televip.services import admin as admin_service
+    from televip.services import settings_service
+    from televip.services.stock import DEFAULT_DUAL_APPROVAL_VND, DUAL_APPROVAL_KEY
+
+    rows = await revoke_bulk(db, code_type=de_nghi.code_type, value_vnd=de_nghi.value_vnd)
+    so_ma = len(rows)
+    tong_vnd = sum(r.value_vnd for r in rows)
+
+    # Đọc lại ngưỡng trong CHÍNH giao dịch này: nó có thể đã bị hạ xuống trong 5 phút chờ.
+    threshold = await settings_service.get_int(DUAL_APPROVAL_KEY, DEFAULT_DUAL_APPROVAL_VND, db=db)
+    if tong_vnd > threshold:
+        raise VuotNguongThuHoi(tong_vnd=tong_vnd, threshold_vnd=threshold, so_ma=so_ma)
+
+    # Kho VƠI đi thì dung thứ (có người vừa nhận mã) — chỉ cần nói ra con số thật. Kho LỚN
+    # LÊN thì không: cái được thi hành phải không rộng hơn cái con người đã duyệt.
+    if so_ma > de_nghi.so_ma_da_hien or tong_vnd > de_nghi.tong_vnd_da_hien:
+        raise PhamViDaLonLen(
+            so_ma_da_hien=de_nghi.so_ma_da_hien,
+            so_ma_thuc=so_ma,
+            tong_vnd_da_hien=de_nghi.tong_vnd_da_hien,
+            tong_vnd_thuc=tong_vnd,
+        )
+
+    if rows:
+        await admin_service.write_audit(
+            db,
+            actor_id=de_nghi.actor_id,
+            action="del_all_code",
+            entity_type="codes",
+            entity_id=f"{de_nghi.code_type}:{de_nghi.value_vnd or 'all'}",
+            before={
+                "so_ma_da_hien": de_nghi.so_ma_da_hien,
+                "tong_vnd_da_hien": de_nghi.tong_vnd_da_hien,
+            },
+            after={"so_ma_da_xoa": so_ma, "tong_vnd": tong_vnd, "ip": ip},
+        )
+
+    return KetQuaThuHoiHangLoat(
+        so_ma_da_xoa=so_ma,
+        tong_vnd=tong_vnd,
+        so_ma_da_hien=de_nghi.so_ma_da_hien,
+        tong_vnd_da_hien=de_nghi.tong_vnd_da_hien,
+    )
 
 
 # ── Sổ phát của MỘT người ───────────────────────────────────────────

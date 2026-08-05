@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block tieu_de %}Xác nhận thu hồi{% endblock %}
+
+{% block than %}
+
+{# Trang này CHƯA XOÁ GÌ. Nó chỉ tồn tại để hai con số dưới đây được đọc trước khi bấm —
+   nên chúng in to nhất trang, không phải nút bấm.
+
+   Form mang ĐÚNG hai trường: `_csrf` và `ve`. Phạm vi đọc từ vé ở phía máy chủ. Thêm một
+   trường ẩn `loai` vào đây là dựng lại đúng lỗ hổng mà cái vé sinh ra để vá. #}
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold text-gray-900">Xác nhận thu hồi</h1>
+  <p class="mt-2 text-gray-600">Chưa có mã nào bị đụng tới. Đọc kỹ hai con số rồi mới bấm.</p>
+</div>
+
+<div class="max-w-2xl">
+  <div class="bg-white rounded-2xl shadow-sm border-2 border-rose-200 overflow-hidden">
+    <div class="px-5 py-4 bg-rose-50 border-b border-rose-200 flex items-center gap-2.5">
+      <span class="text-rose-500">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+      <h2 class="font-medium text-rose-900">{{ pham_vi }}</h2>
+    </div>
+
+    <div class="p-5">
+      <div class="grid grid-cols-2 gap-4 mb-5">
+        <div class="p-4 rounded-xl bg-gray-50">
+          <p class="text-sm font-medium text-gray-600">Số mã chưa phát</p>
+          <p class="mt-1 text-3xl font-bold text-gray-900">{{ so_ma|vnd }}</p>
+        </div>
+        <div class="p-4 rounded-xl bg-rose-50">
+          <p class="text-sm font-medium text-rose-700">Tổng giá trị</p>
+          <p class="mt-1 text-3xl font-bold text-rose-700">{{ tong_vnd|vnd }}đ</p>
+        </div>
+      </div>
+
+      <ul class="space-y-1.5 text-sm text-gray-600 mb-5">
+        <li>• Mã <strong>đã phát</strong> cho người dùng không nằm trong số này và không bị
+          đụng tới.</li>
+        <li>• Mã bị thu hồi chuyển trạng thái <code>revoked</code>; hàng dữ liệu vẫn còn để
+          đối soát.</li>
+        <li>• Nếu kho <strong>lớn lên</strong> trong lúc bạn cân nhắc, lượt bấm sẽ bị từ chối —
+          cái bị xoá không bao giờ rộng hơn cái bạn vừa nhìn thấy.</li>
+        <li>• Đề nghị này hết hạn sau <strong>{{ phut }} phút</strong> và chỉ bấm được
+          <strong>một lần</strong>. Không bấm gì cũng là huỷ.</li>
+      </ul>
+
+      <form method="post" action="/kho/thuhoi/xacnhan" class="flex flex-wrap gap-3">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <input type="hidden" name="ve" value="{{ ve }}">
+        <button type="submit"
+                class="px-5 py-2.5 rounded-xl bg-rose-600 text-white text-sm font-medium
+                       hover:bg-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500
+                       focus:ring-offset-2 transition-colors">
+          Thu hồi {{ so_ma|vnd }} mã
+        </button>
+        <a href="/kho"
+           class="px-5 py-2.5 rounded-xl border border-gray-300 text-gray-700 text-sm
+                  font-medium hover:bg-gray-50 focus:outline-none focus:ring-2
+                  focus:ring-gray-400 focus:ring-offset-2 transition-colors">
+          Quay lại, không xoá
+        </a>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

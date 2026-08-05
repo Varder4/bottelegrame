@@ -29,9 +29,7 @@ phản hồi nào** và sẽ dán lại lần nữa.
 
 from __future__ import annotations
 
-import json
 import re
-import secrets
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Final
@@ -41,7 +39,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from televip.cache.client import get_redis
 from televip.core.clock import VN_TZ
 from televip.core.errors import ConfigError
 from televip.core.logging import get_logger
@@ -368,12 +365,11 @@ CB_DEL_ALL_PREFIX: Final = "dac_"
 DEL_ALL_CALLBACK_PATTERN: Final = r"^dac_(ok|no)_\d+_[A-Za-z0-9_-]{6,32}$"
 _CB_DEL_ALL_RE: Final = re.compile(r"^dac_(ok|no)_(\d+)_([A-Za-z0-9_-]{6,32})$")
 
-#: Tiền tố khoá Redis của một ĐỀ NGHỊ thu hồi đang chờ xác nhận.
-DEL_ALL_TICKET_PREFIX: Final = "dac:"
-
-#: Đề nghị sống 5 phút. Đủ để admin đọc con số rồi cân nhắc, ngắn hơn nhiều so với thời
-#: gian một tin nhắn Telegram còn nằm trong lịch sử chat — mà lịch sử chat là vĩnh viễn.
-DEL_ALL_TICKET_TTL_SECONDS: Final = 300
+#: Vé đề nghị thu hồi giờ do `services/code_issuance.py` phát và tiêu — panel web dùng
+#: CHUNG vé đó. Giữ tên cũ ở đây vì câu chữ bên dưới và các bài kiểm đang gọi qua tên này;
+#: hai bản sao của cùng một con số là hai bản sẽ lệch nhau.
+DEL_ALL_TICKET_PREFIX: Final = code_issuance.DE_NGHI_PREFIX
+DEL_ALL_TICKET_TTL_SECONDS: Final = code_issuance.DE_NGHI_TTL_SECONDS
 
 DEL_ALL_USAGE = (
     "📥 CÁCH DÙNG\n"
@@ -388,56 +384,6 @@ DEL_ALL_USAGE = (
     "👉 Lệnh này KHÔNG xoá ngay: bạn sẽ thấy đúng số mã và tổng giá trị, rồi phải bấm\n"
     "xác nhận. Mã ĐÃ PHÁT không bao giờ nằm trong phạm vi lệnh này."
 )
-
-_SQL_COUNT_AVAILABLE = """
-SELECT count(*)::int                        AS so_ma,
-       coalesce(sum(value_vnd), 0)::bigint  AS tong_vnd
-  FROM codes
- WHERE code_type = :code_type
-   AND status = 'available'
-   AND (:value_vnd = 0 OR value_vnd = :value_vnd)
-"""
-
-
-def _ticket_key(ticket: str) -> str:
-    return f"{DEL_ALL_TICKET_PREFIX}{ticket}"
-
-
-async def _issue_ticket(*, actor_id: int, code_type: str, value_vnd: int, so_ma: int) -> str:
-    """Ghi một ĐỀ NGHỊ thu hồi vào Redis, trả về vé dùng MỘT LẦN.
-
-    Đây là chỗ vá lỗ hổng nặng nhất của lệnh này. Bản trước nhét thẳng *phạm vi*
-    (`loại_mệnhgiá_sốmã`) vào `callback_data`, nên cái nút là một **mệnh lệnh vĩnh viễn**
-    chứ không phải một quyết định: tin nhắn Telegram sống mãi trong lịch sử chat, và bấm
-    lại nó vài ngày sau sẽ chạy `UPDATE` trên kho của HÔM NAY. Kịch bản đã dựng lại được:
-    đề nghị lúc kho có 1 mã 5.000đ → hôm sau nạp 200 mã 88.000đ → lệnh gõ tay bị từ chối
-    vì vượt trần duyệt hai người, nhưng cuộn lên bấm nút cũ thì thu hồi sạch 17.605.000đ.
-
-    Vé một lần khiến nút cũ thành vô hại: hết hạn hoặc đã bấm thì `GETDEL` trả rỗng và
-    lệnh không làm gì cả — cùng tư thế với `bc_confirm_<job_id>` / `ev_confirm_<job_id>`,
-    hai nút xác nhận kia neo vào một đối tượng database và trở thành no-op khi đối tượng
-    đó rời trạng thái `draft`.
-    """
-    ticket = secrets.token_urlsafe(8)
-    await get_redis().set(
-        _ticket_key(ticket),
-        json.dumps(
-            {"actor_id": actor_id, "code_type": code_type, "value_vnd": value_vnd, "so_ma": so_ma}
-        ).encode(),
-        ex=DEL_ALL_TICKET_TTL_SECONDS,
-    )
-    return ticket
-
-
-async def _claim_ticket(ticket: str) -> dict[str, Any] | None:
-    """Đọc VÀ xoá đề nghị trong một lệnh. `None` = hết hạn, hoặc đã có người bấm."""
-    raw = await get_redis().getdel(_ticket_key(ticket))
-    if raw is None:
-        return None
-    try:
-        return dict(json.loads(raw))
-    except (ValueError, TypeError):
-        return None
 
 
 def _del_all_keyboard(actor_id: int, ticket: str) -> Any:
@@ -455,14 +401,9 @@ def _del_all_keyboard(actor_id: int, ticket: str) -> Any:
     )
 
 
-async def _du_nguong(tong_vnd: int) -> int | None:
-    """Ngưỡng duyệt hai người nếu `tong_vnd` vượt, `None` nếu trong ngưỡng.
-
-    Đọc ở CẢ hai bước — lúc gõ lệnh và lúc bấm nút. Chỉ kiểm ở bước gõ thì cái nút trở
-    thành đường vòng qua chính hàng rào đó.
-    """
-    threshold = await settings_service.get_int("admin.dual_approval_threshold_vnd", 1_000_000)
-    return threshold if tong_vnd > threshold else None
+def _nhan_pham_vi(code_type: str, value_vnd: int) -> str:
+    """Nhãn phạm vi cho người đọc. Web dùng nhãn riêng của nó."""
+    return f"{code_type}" + (f" · {texts.value_label(value_vnd)}" if value_vnd else " · TẤT CẢ")
 
 
 @admin_command(CMD_DEL_ALL)
@@ -473,6 +414,8 @@ async def handle_del_all_code(update: Update, context: ContextTypes.DEFAULT_TYPE
     lại để đối soát vẫn ra số. Khác `/del_code` ở chỗ phải bấm xác nhận — một lệnh chạm
     được cả nghìn mã bằng một dòng chữ thì bước xác nhận là thứ đứng giữa nó và một lần
     gõ nhầm loại code.
+
+    Hàng rào và vé nằm trong `code_issuance`; panel web gọi chính những hàm đó.
     """
     chat_id = _chat_id(update)
     tg_user = update.effective_user
@@ -485,72 +428,58 @@ async def handle_del_all_code(update: Update, context: ContextTypes.DEFAULT_TYPE
         await sender.send_message(chat_id, DEL_ALL_USAGE)
         return
 
-    code_type = args[0].strip().lower()
-    if code_type not in CODE_TYPES:
+    try:
+        async with transaction() as db:
+            pv = await code_issuance.kiem_pham_vi_thu_hoi(
+                db,
+                code_type_tho=args[0],
+                menh_gia_tho=args[1] if len(args) > 1 else code_issuance.MENH_GIA_TAT_CA,
+            )
+            ticket = await code_issuance.tao_de_nghi_thu_hoi(db, actor_id=tg_user.id, pham_vi=pv)
+    except code_issuance.LoaiKhongHopLe:
         await sender.send_message(
-            chat_id,
-            f"❌ Loại code không hợp lệ: {args[0]}\nHợp lệ: {', '.join(CODE_TYPES)}",
+            chat_id, f"❌ Loại code không hợp lệ: {args[0]}\nHợp lệ: {', '.join(CODE_TYPES)}"
         )
         return
-
-    # `0` = không lọc mệnh giá. Dùng số thay vì `None` để cùng một tham số đi qua được cả
-    # SQL lẫn `callback_data` mà không cần hai đường mã hoá.
-    value_vnd = 0
-    if len(args) > 1:
-        parsed = parse_value_vnd(args[1])
-        if parsed is None:
-            await sender.send_message(
-                chat_id, f"❌ Mệnh giá không hợp lệ: {args[1]}\nVí dụ: 10k, 88k, 10000"
-            )
-            return
-        value_vnd = parsed
-
-    async with session() as db:
-        row = (
-            await db.execute(
-                text(_SQL_COUNT_AVAILABLE), {"code_type": code_type, "value_vnd": value_vnd}
-            )
-        ).one()
-
-    pham_vi = f"{code_type}" + (f" · {texts.value_label(value_vnd)}" if value_vnd else " · TẤT CẢ")
-    if row.so_ma == 0:
+    except code_issuance.MenhGiaKhongDocDuoc:
         await sender.send_message(
-            chat_id, f"ℹ️ Không có mã CHƯA PHÁT nào khớp: {pham_vi}\n\nXem kho: /tonkho"
+            chat_id, f"❌ Mệnh giá không hợp lệ: {args[1]}\nVí dụ: 10k, 88k, 10000"
         )
         return
-
-    # Cùng hàng rào với `/add_giffcode`: thu hồi cũng là một hành động chạm vào nghĩa vụ
-    # tiền, và luồng ký thứ hai chưa được xây nên ở đây fail-closed.
-    threshold = await _du_nguong(row.tong_vnd)
-    if threshold is not None:
+    except code_issuance.PhamViRong as exc:
         await sender.send_message(
             chat_id,
-            f"⛔ Phạm vi này trị giá {texts.format_vnd(row.tong_vnd)}đ ({row.so_ma:,} mã), "
-            f"vượt ngưỡng cần duyệt hai người là {texts.format_vnd(threshold)}đ.\n\n"
+            f"ℹ️ Không có mã CHƯA PHÁT nào khớp: "
+            f"{_nhan_pham_vi(exc.code_type, exc.value_vnd)}\n\nXem kho: /tonkho",
+        )
+        return
+    except code_issuance.VuotNguongThuHoi as exc:
+        # Cùng hàng rào với `/add_giffcode`: thu hồi cũng chạm vào nghĩa vụ tiền, và luồng
+        # ký thứ hai chưa được xây nên ở đây fail-closed.
+        await sender.send_message(
+            chat_id,
+            f"⛔ Phạm vi này trị giá {texts.format_vnd(exc.tong_vnd)}đ ({exc.so_ma:,} mã), "
+            f"vượt ngưỡng cần duyệt hai người là {texts.format_vnd(exc.threshold_vnd)}đ.\n\n"
             f"Luồng ký thứ hai chưa được xây, nên hãy thu hẹp bằng cách lọc mệnh giá: "
-            f"/del_all_code {code_type} 10k",
+            f"/del_all_code {args[0].strip().lower()} 10k",
         )
         log.warning(
             "xoa_hang_loat_vuot_nguong",
             actor_id=tg_user.id,
-            code_type=code_type,
-            value_vnd=value_vnd,
-            tong_vnd=row.tong_vnd,
-            threshold_vnd=threshold,
+            code_type=args[0].strip().lower(),
+            tong_vnd=exc.tong_vnd,
+            threshold_vnd=exc.threshold_vnd,
         )
         return
 
-    ticket = await _issue_ticket(
-        actor_id=tg_user.id, code_type=code_type, value_vnd=value_vnd, so_ma=row.so_ma
-    )
     await sender.send_message(
         chat_id,
         (
             "⚠️ XÁC NHẬN XOÁ HÀNG LOẠT — CHƯA XOÁ GÌ CẢ\n"
             f"\n"
-            f"📂 Phạm vi: {pham_vi}\n"
-            f"🎁 Số mã CHƯA PHÁT: {row.so_ma:,}\n"
-            f"💰 Tổng giá trị: {texts.format_vnd(row.tong_vnd)}đ\n"
+            f"📂 Phạm vi: {_nhan_pham_vi(pv.code_type, pv.value_vnd)}\n"
+            f"🎁 Số mã CHƯA PHÁT: {pv.so_ma:,}\n"
+            f"💰 Tổng giá trị: {texts.format_vnd(pv.tong_vnd)}đ\n"
             f"\n"
             "Mã đã phát cho người dùng KHÔNG nằm trong số này và không bị đụng tới.\n"
             "Mã bị thu hồi chuyển trạng thái `revoked`, hàng dữ liệu vẫn còn để đối soát.\n"
@@ -563,9 +492,9 @@ async def handle_del_all_code(update: Update, context: ContextTypes.DEFAULT_TYPE
     log.info(
         "xoa_hang_loat_cho_xac_nhan",
         actor_id=tg_user.id,
-        code_type=code_type,
-        value_vnd=value_vnd,
-        so_ma=row.so_ma,
+        code_type=pv.code_type,
+        value_vnd=pv.value_vnd,
+        so_ma=pv.so_ma,
     )
 
 
@@ -615,10 +544,11 @@ async def _del_all_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         log.warning("xoa_hang_loat_bam_nut_nguoi_khac", actor_id=tg_user.id, chu_de_nghi=raw_actor)
         return
 
-    de_nghi = await _claim_ticket(ticket)
-    if de_nghi is None:
-        # Vé hết hạn hoặc đã có người bấm. Đây chính là chỗ một cái nút cũ trong lịch sử
-        # chat trở thành vô hại.
+    try:
+        de_nghi = await code_issuance.nhan_de_nghi_thu_hoi(ve=ticket, actor_id=tg_user.id)
+    except code_issuance.ThuHoiBiTuChoi:
+        # Vé hết hạn, đã bấm, hoặc bị một đề nghị mới của chính người này ghi đè. Đây
+        # chính là chỗ một cái nút cũ trong lịch sử chat trở thành vô hại.
         await sender.send_message(
             chat_id,
             "⌛ Đề nghị thu hồi này đã hết hạn hoặc đã được bấm rồi — KHÔNG mã nào bị "
@@ -628,10 +558,10 @@ async def _del_all_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
-    code_type = str(de_nghi["code_type"])
-    value_vnd = int(de_nghi["value_vnd"])
-    so_ma_da_hien = int(de_nghi["so_ma"])
-    pham_vi = f"{code_type}" + (f" · {texts.value_label(value_vnd)}" if value_vnd else " · TẤT CẢ")
+    code_type = de_nghi.code_type
+    value_vnd = de_nghi.value_vnd
+    so_ma_da_hien = de_nghi.so_ma_da_hien
+    pham_vi = _nhan_pham_vi(code_type, value_vnd)
 
     if hanh_dong == "no":
         # Huỷ cũng ĐỐT vé (đã `GETDEL` phía trên). Nói ra, nếu không admin bấm nhầm "HUỶ"
@@ -646,23 +576,19 @@ async def _del_all_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
-    # Kiểm trần LẦN THỨ HAI, trên kho của ngay lúc này. Chỉ kiểm ở bước gõ lệnh thì cái
-    # nút là một đường vòng qua chính hàng rào đó — kho có thể đã lớn lên rất nhiều giữa
-    # lúc đề nghị được tạo và lúc nó được bấm.
-    async with session() as db:
-        hien_tai = (
-            await db.execute(
-                text(_SQL_COUNT_AVAILABLE), {"code_type": code_type, "value_vnd": value_vnd}
-            )
-        ).one()
-    threshold = await _du_nguong(hien_tai.tong_vnd)
-    if threshold is not None:
+    # `try` NGOÀI `transaction()`: hai hàng rào dưới đây ném SAU câu `UPDATE` (chúng đo
+    # trên chính tập `RETURNING`), nên bắt bên trong nghĩa là mã đã `revoked` mà màn hình
+    # báo "từ chối".
+    try:
+        async with transaction() as db:
+            kq = await code_issuance.thu_hoi_hang_loat(db, de_nghi)
+    except code_issuance.VuotNguongThuHoi as exc:
         await sender.send_message(
             chat_id,
             f"⛔ TỪ CHỐI — không mã nào bị đụng tới.\n\n"
-            f"Kho của phạm vi {pham_vi} hiện là {texts.format_vnd(hien_tai.tong_vnd)}đ "
-            f"({hien_tai.so_ma:,} mã), vượt ngưỡng duyệt hai người "
-            f"{texts.format_vnd(threshold)}đ.\n\n"
+            f"Kho của phạm vi {pham_vi} hiện là {texts.format_vnd(exc.tong_vnd)}đ "
+            f"({exc.so_ma:,} mã), vượt ngưỡng duyệt hai người "
+            f"{texts.format_vnd(exc.threshold_vnd)}đ.\n\n"
             f"Lúc tạo đề nghị phạm vi này còn nằm trong ngưỡng ({so_ma_da_hien:,} mã) — "
             f"kho đã lớn lên trong lúc chờ.\n\n"
             f"👉 Thu hẹp bằng cách lọc mệnh giá: /del_all_code {code_type} 10k\n"
@@ -673,38 +599,42 @@ async def _del_all_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             actor_id=tg_user.id,
             code_type=code_type,
             value_vnd=value_vnd,
-            tong_vnd=hien_tai.tong_vnd,
-            threshold_vnd=threshold,
+            tong_vnd=exc.tong_vnd,
+            threshold_vnd=exc.threshold_vnd,
+        )
+        return
+    except code_issuance.PhamViDaLonLen as exc:
+        await sender.send_message(
+            chat_id,
+            f"⛔ TỪ CHỐI — không mã nào bị đụng tới.\n\n"
+            f"Lúc xem thử phạm vi {pham_vi} là {exc.so_ma_da_hien:,} mã "
+            f"({texts.format_vnd(exc.tong_vnd_da_hien)}đ); bây giờ là {exc.so_ma_thuc:,} mã "
+            f"({texts.format_vnd(exc.tong_vnd_thuc)}đ) — kho đã LỚN LÊN trong lúc chờ.\n\n"
+            f"Cái bị xoá không được rộng hơn cái bạn đã nhìn thấy.\n"
+            f"👉 Gõ lại /del_all_code {code_type} để xem con số mới nhất.",
+        )
+        log.warning(
+            "xoa_hang_loat_pham_vi_lon_len",
+            actor_id=tg_user.id,
+            code_type=code_type,
+            so_ma_da_hien=exc.so_ma_da_hien,
+            so_ma_thuc=exc.so_ma_thuc,
         )
         return
 
-    async with transaction() as db:
-        rows = await code_issuance.revoke_bulk(db, code_type=code_type, value_vnd=value_vnd)
-        tong_vnd = sum(r.value_vnd for r in rows)
-        if rows:
-            await write_audit(
-                db,
-                actor_id=tg_user.id,
-                action="del_all_code",
-                entity_type="codes",
-                entity_id=f"{code_type}:{value_vnd or 'all'}",
-                before={"so_ma_da_hien": so_ma_da_hien},
-                after={"so_ma_da_xoa": len(rows), "tong_vnd": tong_vnd},
-            )
-
-    # Kho đổi giữa hai bước là chuyện bình thường (có người vừa nhận mã, hoặc admin khác
-    # vừa nạp). Nói ra con số thật thay vì im lặng — im lặng ở đây nghĩa là admin tin rằng
-    # mình vừa xoá đúng cái đã thấy.
+    # Kho VƠI đi giữa hai bước là chuyện bình thường (có người vừa nhận mã). Nói ra con số
+    # thật thay vì im lặng — im lặng ở đây nghĩa là admin tin rằng mình vừa xoá đúng cái
+    # đã thấy.
     canh_bao = (
         ""
-        if len(rows) == so_ma_da_hien
+        if not kq.lech
         else f"\n\n⚠️ Lúc xem thử là {so_ma_da_hien:,} mã — kho đã thay đổi giữa hai bước."
     )
     await sender.send_message(
         chat_id,
         (
-            f"🗑 Đã thu hồi {len(rows):,} mã chưa sử dụng: {pham_vi}\n"
-            f"💰 Tổng giá trị: {texts.format_vnd(tong_vnd)}đ{canh_bao}\n"
+            f"🗑 Đã thu hồi {kq.so_ma_da_xoa:,} mã chưa sử dụng: {pham_vi}\n"
+            f"💰 Tổng giá trị: {texts.format_vnd(kq.tong_vnd)}đ{canh_bao}\n"
             f"\n"
             f"👉 Xem kho: /tonkho"
         ),
@@ -714,34 +644,21 @@ async def _del_all_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         actor_id=tg_user.id,
         code_type=code_type,
         value_vnd=value_vnd,
-        so_ma=len(rows),
-        tong_vnd=tong_vnd,
+        so_ma=kq.so_ma_da_xoa,
+        tong_vnd=kq.tong_vnd,
     )
 
 
 # ── /del_code ───────────────────────────────────────────────────────
 
 
-_SQL_FIND_CODE = """
-SELECT c.code_id,
-       c.status,
-       c.code_type,
-       c.value_vnd,
-       g.grant_id,
-       g.state     AS grant_state,
-       g.user_id   AS holder_id,
-       u.username  AS holder_username,
-       u.full_name AS holder_name,
-       coalesce(g.delivered_at, g.created_at) AS moc
-  FROM codes c
-  LEFT JOIN code_grants g ON g.code_id = c.code_id
-  LEFT JOIN users u ON u.user_id = g.user_id
- WHERE c.code_value = :code
-"""
-
-
 @admin_command(CMD_DEL)
 async def handle_del_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Thu hồi MỘT mã chưa phát.
+
+    Hàng rào nằm trong `code_issuance.kiem_ma_thu_hoi()` / `thu_hoi_mot()`, và panel web
+    gọi chính hai hàm đó. Ở đây chỉ còn câu chữ.
+    """
     chat_id = _chat_id(update)
     tg_user = update.effective_user
     if chat_id is None or tg_user is None:
@@ -754,66 +671,43 @@ async def handle_del_code(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     code_value = args[0].strip()
+    code_id: int | None = None
 
-    # Dựng câu trả lời BÊN TRONG giao dịch rồi gửi BÊN NGOÀI: một lời gọi Telegram giữa
-    # `BEGIN` và `COMMIT` là giữ một kết nối trong pool suốt độ trễ mạng, và pool chỉ có
-    # `db_pool_size` chỗ.
-    async with transaction() as db:
-        reply, revoked_code_id = await _revoke_code(db, code_value=code_value, actor_id=tg_user.id)
-
-    if revoked_code_id is not None:
-        log.info(
-            "thu_hoi_code", actor_id=tg_user.id, code_id=revoked_code_id, code_value=code_value
+    # `try` NGOÀI `transaction()`, không phải trong. Ngoại lệ của lớp thu hồi có thể ném
+    # SAU khi câu `UPDATE` đã chạy, và bắt nó bên trong nghĩa là giao dịch vẫn commit: mã
+    # đã `revoked`, sổ không ghi, mà màn hình báo "từ chối".
+    try:
+        async with transaction() as db:
+            ma = await code_issuance.kiem_ma_thu_hoi(db, code_value=code_value)
+            code_id = await code_issuance.thu_hoi_mot(db, ma, actor_id=tg_user.id)
+        reply = (
+            f"✅ Đã xóa code: {ma.code_value}\n"
+            f"📂 {ma.code_type} · {texts.format_vnd(ma.value_vnd)}đ\n"
+            "🧾 Chuyển sang trạng thái revoked, hàng dữ liệu được giữ lại."
         )
-    await sender.send_message(chat_id, reply)
-
-
-async def _revoke_code(
-    db: AsyncSession, *, code_value: str, actor_id: int
-) -> tuple[str, int | None]:
-    """Thu hồi một mã chưa phát. Trả về (câu trả lời cho admin, code_id đã thu hồi)."""
-    row = (await db.execute(text(_SQL_FIND_CODE), {"code": code_value})).one_or_none()
-
-    if row is None:
-        return f"❌ Không tìm thấy code: {code_value}", None
-
-    if row.grant_id is not None:
-        # Hàng rào chính của lệnh này. Mã đã vào sổ cái thì thu hồi là một BÚT TOÁN NGƯỢC
-        # (`code_ledger.direction = -1`), không phải một lần xoá dòng — và bút toán ngược
-        # nằm ngoài phạm vi lệnh này.
-        who = texts.display_name(row.holder_username, row.holder_name)
-        return (
+    except code_issuance.MaDaPhat as exc:
+        # Mã đã vào sổ cái thì thu hồi là một BÚT TOÁN NGƯỢC (`code_ledger.direction = -1`),
+        # không phải một lần xoá dòng — và bút toán ngược nằm ngoài phạm vi lệnh này.
+        who = texts.display_name(exc.holder_username, exc.holder_name)
+        reply = (
             "❌ Code đã phát, không xoá được.\n"
-            f"🎁 {code_value} — {row.code_type} · {texts.format_vnd(row.value_vnd)}đ\n"
-            f"👤 Đang giữ: {who} ({row.holder_id})\n"
-            f"🕒 {_moment(row.moc)} · trạng thái sổ cái: {row.grant_state}\n\n"
+            f"🎁 {exc.code_value} — {exc.code_type} · {texts.format_vnd(exc.value_vnd)}đ\n"
+            f"👤 Đang giữ: {who} ({exc.holder_id})\n"
+            f"🕒 {_moment(exc.moc)} · trạng thái sổ cái: {exc.grant_state}\n\n"
             "Muốn huỷ suất này thì ghi bút toán ngược, đừng xoá dòng."
-        ), None
+        )
+    except code_issuance.KhongTimThayMa as exc:
+        reply = f"❌ Không tìm thấy code: {exc.code_value}"
+    except code_issuance.MaDaThuHoi as exc:
+        reply = f"⚠️ Code {exc.code_value} đã bị thu hồi trước đó."
+    except code_issuance.MatCuocDua as exc:
+        reply = f"❌ Code {exc.code_value} vừa được một luồng khác giữ chỗ. Không thu hồi được."
+    except code_issuance.ThuHoiBiTuChoi as exc:
+        reply = f"❌ {exc}"
 
-    if row.status == "revoked":
-        return f"⚠️ Code {code_value} đã bị thu hồi trước đó.", None
-
-    revoked = await code_issuance.revoke_one(db, code_id=row.code_id)
-    if revoked is None:
-        # `status` không còn `available` giữa lượt đọc và lượt ghi — một luồng khác vừa giữ
-        # chỗ mã này. Điều kiện trong câu UPDATE là thứ chặn, không phải câu `if` phía trên.
-        return f"❌ Code {code_value} vừa được một luồng khác giữ chỗ. Không thu hồi được.", None
-
-    await write_audit(
-        db,
-        actor_id=actor_id,
-        action="del_code",
-        entity_type="code",
-        entity_id=str(row.code_id),
-        before={"code_value": code_value, "status": row.status},
-        after={"code_value": code_value, "status": "revoked"},
-    )
-
-    return (
-        f"✅ Đã xóa code: {code_value}\n"
-        f"📂 {row.code_type} · {texts.format_vnd(row.value_vnd)}đ\n"
-        "🧾 Chuyển sang trạng thái revoked, hàng dữ liệu được giữ lại."
-    ), row.code_id
+    if code_id is not None:
+        log.info("thu_hoi_code", actor_id=tg_user.id, code_id=code_id, code_value=code_value)
+    await sender.send_message(chat_id, reply)
 
 
 # ── /resend_tanthu ──────────────────────────────────────────────────

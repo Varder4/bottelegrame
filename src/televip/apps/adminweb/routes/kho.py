@@ -37,7 +37,7 @@ from televip.db.engine import session, transaction
 from televip.db.models.codes import CODE_TYPES
 from televip.domain import texts
 from televip.services import admin as admin_service
-from televip.services import settings_service, stock
+from televip.services import code_issuance, settings_service, stock
 
 router = APIRouter()
 
@@ -78,9 +78,11 @@ async def _man_hinh(
     async with session() as db:
         rows = await stock.read_stock(db)
         menu = await dung_menu(db, user_id=nguoi.user_id, role=nguoi.role, duong_hien_tai="/kho")
-        # Quyền thứ hai trên cùng trang. Hỏi lại ở mỗi request, không nhớ vào phiên —
-        # cùng luật với `can_quyen`, xem `deps.py`.
+        # Ba quyền khác nhau trên cùng một trang: xem · nạp · thu hồi. Hỏi lại ở mỗi
+        # request, không nhớ vào phiên — cùng luật với `can_quyen`, xem `deps.py`.
         duoc_nap = await admin_service.can_run(db, nguoi.user_id, "/add_giffcode")
+        duoc_thu_hoi_mot = await admin_service.can_run(db, nguoi.user_id, "/del_code")
+        duoc_thu_hoi_loat = await admin_service.can_run(db, nguoi.user_id, "/del_all_code")
     nguong = await stock.warn_threshold()
     tong = stock.summarize(rows, threshold=nguong)
 
@@ -104,6 +106,17 @@ async def _man_hinh(
             menh_gia_theo_loai[loai] = [
                 {"vnd": v, "nhan": texts.value_label(v)} for v in sorted(danh_sach)
             ]
+
+    # Ô chọn của form THU HỒI dựng từ tồn kho THẬT, không từ danh sách mệnh giá cho phép:
+    # thu hồi là thao tác trên cái đang có. Mời người ta chọn một mệnh giá không còn mã nào
+    # là mời họ bấm để nhận một câu từ chối.
+    ton_theo_loai: dict[str, list[dict]] = {}
+    if duoc_thu_hoi_loat:
+        for row in rows:
+            if row.available:
+                ton_theo_loai.setdefault(row.code_type, []).append(
+                    {"vnd": row.value_vnd, "nhan": texts.value_label(row.value_vnd)}
+                )
 
     # Gom theo loại ở đây chứ không trong template: `read_stock` đã sắp theo
     # `(code_type, value_vnd)`, nên một vòng lặp là đủ, và template không phải mang logic.
@@ -132,8 +145,12 @@ async def _man_hinh(
             "tong": tong,
             "nguong": nguong,
             "duoc_nap": duoc_nap,
+            "duoc_thu_hoi_mot": duoc_thu_hoi_mot,
+            "duoc_thu_hoi_loat": duoc_thu_hoi_loat,
             "nhan_loai": NHAN_LOAI,
             "menh_gia_theo_loai": menh_gia_theo_loai,
+            "ton_theo_loai": ton_theo_loai,
+            "menh_gia_tat_ca": code_issuance.MENH_GIA_TAT_CA,
             "loi": loi,
             "xong": xong,
             "giu": giu or {},
@@ -217,6 +234,189 @@ async def nap_kho(
             + (f", bỏ qua {ket_qua.skipped} mã trùng" if ket_qua.skipped else "")
             + (f" — lô #{ket_qua.batch_id}" if ket_qua.batch_id is not None else "")
             + f". Tồn kho mệnh giá này hiện: {ket_qua.stock_after}."
+        ),
+    )
+
+
+# ── Thu hồi ─────────────────────────────────────────────────────────
+#
+# Ba đường, và cả ba chỉ dịch ngoại lệ của `services/code_issuance.py` sang tiếng Việt —
+# không đường nào kiểm lại một hàng rào nào.
+#
+# ⚠️ `try/except` phải nằm NGOÀI `async with transaction()`. Hai hàng rào của
+# `thu_hoi_hang_loat()` ném SAU câu `UPDATE` (chúng đo trên chính tập `RETURNING`), nên bắt
+# bên trong nghĩa là giao dịch vẫn commit: mã đã `revoked`, sổ không ghi, mà màn hình báo
+# "từ chối".
+
+
+def _nhan_pham_vi(code_type: str, value_vnd: int) -> str:
+    nhan = NHAN_LOAI.get(code_type, code_type)
+    return f"{nhan}" + (f" · {texts.value_label(value_vnd)}" if value_vnd else " · TẤT CẢ mệnh giá")
+
+
+@router.post("/kho/thuhoi-ma")
+async def thu_hoi_mot_ma(
+    request: Request,
+    nguoi: Annotated[NguoiDung, Depends(kiem_csrf)],
+    _: Annotated[NguoiDung, Depends(can_quyen("/del_code"))],
+    ma: Annotated[str, Form()] = "",
+) -> Response:
+    """Thu hồi MỘT mã chưa phát. Mã đã phát cho người dùng bị từ chối kèm tên người giữ."""
+    giu = {"ma_thu_hoi": ma}
+    ip = await ip_cua(request)
+    try:
+        async with transaction() as db:
+            mct = await code_issuance.kiem_ma_thu_hoi(db, code_value=ma)
+            await code_issuance.thu_hoi_mot(db, mct, actor_id=nguoi.user_id, ip=ip)
+    except code_issuance.MaDaPhat as exc:
+        who = texts.display_name(exc.holder_username, exc.holder_name)
+        return await _man_hinh(
+            request,
+            nguoi,
+            giu=giu,
+            loi=(
+                f"Code {exc.code_value} ({exc.code_type} · "
+                f"{texts.format_vnd(exc.value_vnd)}đ) ĐÃ PHÁT cho {who} ({exc.holder_id}) — "
+                f"không xoá được. Muốn huỷ suất này thì ghi bút toán ngược, đừng xoá dòng."
+            ),
+        )
+    except code_issuance.ThuHoiBiTuChoi as exc:
+        return await _man_hinh(request, nguoi, giu=giu, loi=str(exc))
+
+    log.info("thu_hoi_code", actor_id=nguoi.user_id, code_id=mct.code_id, code_value=mct.code_value)
+    return await _man_hinh(
+        request,
+        nguoi,
+        xong=(
+            f"Đã thu hồi mã {mct.code_value} ({NHAN_LOAI.get(mct.code_type, mct.code_type)} · "
+            f"{texts.value_label(mct.value_vnd)}). Hàng dữ liệu vẫn còn để đối soát."
+        ),
+    )
+
+
+@router.post("/kho/thuhoi/denghi")
+async def de_nghi_thu_hoi(
+    request: Request,
+    nguoi: Annotated[NguoiDung, Depends(kiem_csrf)],
+    _: Annotated[NguoiDung, Depends(can_quyen("/del_all_code"))],
+    loai: Annotated[str, Form()] = "",
+    menh_gia: Annotated[str, Form()] = "",
+) -> Response:
+    """Bước XEM THỬ. Chưa xoá gì — chỉ đếm, kiểm ngưỡng, rồi phát một vé dùng một lần."""
+    ip = await ip_cua(request)
+    try:
+        async with transaction() as db:
+            pv = await code_issuance.kiem_pham_vi_thu_hoi(
+                db, code_type_tho=loai, menh_gia_tho=menh_gia
+            )
+            ve = await code_issuance.tao_de_nghi_thu_hoi(
+                db, actor_id=nguoi.user_id, pham_vi=pv, ip=ip
+            )
+    except code_issuance.VuotNguongThuHoi as exc:
+        return await _man_hinh(
+            request,
+            nguoi,
+            loi=(
+                f"Phạm vi này trị giá {texts.format_vnd(exc.tong_vnd)}đ ({exc.so_ma:,} mã), "
+                f"vượt ngưỡng cần duyệt hai người là "
+                f"{texts.format_vnd(exc.threshold_vnd)}đ. Hãy thu hẹp bằng cách chọn một "
+                f"mệnh giá cụ thể."
+            ),
+        )
+    except code_issuance.ThuHoiBiTuChoi as exc:
+        return await _man_hinh(request, nguoi, loi=str(exc))
+
+    async with session() as db:
+        menu = await dung_menu(db, user_id=nguoi.user_id, role=nguoi.role, duong_hien_tai="/kho")
+
+    from televip.apps.adminweb.app import templates
+
+    return templates.TemplateResponse(
+        request,
+        "kho_thuhoi_xacnhan.html",
+        {
+            "csrf": nguoi.csrf_token,
+            "nguoi": nguoi,
+            "menu": menu,
+            "ve": ve,
+            "pham_vi": _nhan_pham_vi(pv.code_type, pv.value_vnd),
+            "so_ma": pv.so_ma,
+            "tong_vnd": pv.tong_vnd,
+            "phut": code_issuance.DE_NGHI_TTL_SECONDS // 60,
+        },
+    )
+
+
+@router.post("/kho/thuhoi/xacnhan")
+async def xac_nhan_thu_hoi(
+    request: Request,
+    nguoi: Annotated[NguoiDung, Depends(kiem_csrf)],
+    _: Annotated[NguoiDung, Depends(can_quyen("/del_all_code"))],
+    ve: Annotated[str, Form()] = "",
+) -> Response:
+    """Bước THI HÀNH.
+
+    Form chỉ mang `ve` — phạm vi đọc TỪ VÉ, không từ request. Một trường ẩn `loai=event`
+    nằm lại trong tab cũ là bản web của cái nút Telegram cũ đã xoá nhầm 17.605.000đ.
+    """
+    ip = await ip_cua(request)
+    try:
+        de_nghi = await code_issuance.nhan_de_nghi_thu_hoi(ve=ve.strip(), actor_id=nguoi.user_id)
+    except code_issuance.ThuHoiBiTuChoi as exc:
+        # Vé chết trả 200 chứ không 404: luật 404 bảo vệ sự tồn tại của ĐƯỜNG DẪN, còn đây
+        # là một kết quả nghiệp vụ. Trả 404 thì người vận hành kết luận panel hỏng và quay
+        # ra gõ tay lệnh Telegram với phạm vi rộng hơn.
+        return await _man_hinh(request, nguoi, loi=str(exc))
+
+    pham_vi = _nhan_pham_vi(de_nghi.code_type, de_nghi.value_vnd)
+    try:
+        async with transaction() as db:
+            kq = await code_issuance.thu_hoi_hang_loat(db, de_nghi, ip=ip)
+    except code_issuance.PhamViDaLonLen as exc:
+        return await _man_hinh(
+            request,
+            nguoi,
+            loi=(
+                f"TỪ CHỐI — không mã nào bị đụng tới. Lúc xem thử phạm vi {pham_vi} là "
+                f"{exc.so_ma_da_hien:,} mã ({texts.format_vnd(exc.tong_vnd_da_hien)}đ); "
+                f"bây giờ là {exc.so_ma_thuc:,} mã ({texts.format_vnd(exc.tong_vnd_thuc)}đ) "
+                f"— kho đã LỚN LÊN trong lúc chờ. Cái bị xoá không được rộng hơn cái bạn "
+                f"đã nhìn thấy."
+            ),
+        )
+    except code_issuance.VuotNguongThuHoi as exc:
+        return await _man_hinh(
+            request,
+            nguoi,
+            loi=(
+                f"TỪ CHỐI — không mã nào bị đụng tới. Phạm vi {pham_vi} hiện là "
+                f"{texts.format_vnd(exc.tong_vnd)}đ ({exc.so_ma:,} mã), vượt ngưỡng duyệt "
+                f"hai người {texts.format_vnd(exc.threshold_vnd)}đ."
+            ),
+        )
+
+    log.warning(
+        "xoa_hang_loat_xong",
+        actor_id=nguoi.user_id,
+        code_type=de_nghi.code_type,
+        value_vnd=de_nghi.value_vnd,
+        so_ma=kq.so_ma_da_xoa,
+        tong_vnd=kq.tong_vnd,
+    )
+    canh_bao = (
+        ""
+        if not kq.lech
+        else (
+            f" ⚠️ Lúc xem thử là {kq.so_ma_da_hien:,} mã "
+            f"({texts.format_vnd(kq.tong_vnd_da_hien)}đ) — kho đã vơi đi giữa hai bước."
+        )
+    )
+    return await _man_hinh(
+        request,
+        nguoi,
+        xong=(
+            f"Đã thu hồi {kq.so_ma_da_xoa:,} mã chưa sử dụng: {pham_vi} — "
+            f"{texts.format_vnd(kq.tong_vnd)}đ.{canh_bao}"
         ),
     )
 

@@ -3,7 +3,7 @@
 {% block tieu_de %}Kho code{% endblock %}
 
 {% block kich_ban %}
-  {% if duoc_nap %}<script src="/static/kho.js" defer></script>{% endif %}
+  {% if duoc_nap or duoc_thu_hoi_loat %}<script src="/static/kho.js" defer></script>{% endif %}
 {% endblock %}
 
 {% block than %}
@@ -47,6 +47,19 @@
   </div>
 </div>
 
+{# ── Thông báo ───────────────────────────────────────────────────────
+   MỘT khối duy nhất, nằm NGOÀI mọi `{% if %}` quyền. Trước đây `xong` nằm trong khối nạp
+   kho, nên người không có quyền nạp sẽ không bao giờ thấy "đã thu hồi 200 mã" — kể cả
+   cảnh báo "kho đã thay đổi giữa hai bước", đúng dòng chữ họ cần đọc nhất. #}
+{% if xong %}
+<div class="mb-6 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200
+            text-sm text-emerald-800">{{ xong }}</div>
+{% endif %}
+{% if loi %}
+<div class="mb-6 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200
+            text-sm text-rose-800">{{ loi }}</div>
+{% endif %}
+
 {# ── Nạp kho ─────────────────────────────────────────────────────────
    Chỉ hiện cho người có quyền `/add_giffcode`. Ẩn nút không phải là hàng rào — hàng rào
    thật nằm ở `can_quyen("/add_giffcode")` trên chính đường POST. #}
@@ -56,15 +69,6 @@
     <span class="text-primary-600">{{ ic.icon('kho', 'w-5 h-5') }}</span>
     <h2 class="font-medium text-gray-900">Nạp mã vào kho</h2>
   </div>
-
-  {% if xong %}
-  <div class="mx-5 mt-5 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200
-              text-sm text-emerald-800">{{ xong }}</div>
-  {% endif %}
-  {% if loi %}
-  <div class="mx-5 mt-5 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200
-              text-sm text-rose-800">{{ loi }}</div>
-  {% endif %}
 
   <form method="post" action="/kho/nap" class="p-5 space-y-4">
     <input type="hidden" name="_csrf" value="{{ csrf }}">
@@ -132,9 +136,88 @@
     </div>
   </form>
 </div>
-{% elif loi %}
-<div class="mb-6 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-800">
-  {{ loi }}
+{% endif %}
+
+{# ── Thu hồi ─────────────────────────────────────────────────────────
+   Hai ô, hai quyền khác nhau: `/del_code` cho từng mã, `/del_all_code` cho hàng loạt.
+   Hàng rào thật nằm trên chính đường POST. #}
+{% if duoc_thu_hoi_mot or duoc_thu_hoi_loat %}
+<div class="bg-white rounded-2xl shadow-sm border border-gray-200 mb-6 overflow-hidden">
+  <div class="p-4 border-b border-gray-200 flex items-center gap-2.5">
+    <span class="text-rose-500">{{ ic.icon('canhbao', 'w-5 h-5') }}</span>
+    <h2 class="font-medium text-gray-900">Thu hồi mã</h2>
+    <span class="text-xs text-gray-400">mã đã phát cho người dùng không bao giờ bị đụng tới</span>
+  </div>
+
+  <div class="divide-y divide-gray-100">
+    {% if duoc_thu_hoi_mot %}
+    <form method="post" action="/kho/thuhoi-ma" class="p-5">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <label for="ma_thu_hoi" class="block text-sm font-medium text-gray-700 mb-1.5">
+        Một mã cụ thể
+      </label>
+      <div class="flex flex-col sm:flex-row gap-3">
+        <input type="text" id="ma_thu_hoi" name="ma" required spellcheck="false"
+               autocomplete="off" placeholder="ABC123" value="{{ giu.ma_thu_hoi or '' }}"
+               class="flex-1 px-3.5 py-2.5 rounded-xl border border-gray-300 font-mono text-sm
+                      focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500">
+        <button type="submit"
+                class="px-5 py-2.5 rounded-xl border border-rose-300 text-rose-700 text-sm
+                       font-medium hover:bg-rose-50 focus:outline-none focus:ring-2
+                       focus:ring-rose-500 focus:ring-offset-2 transition-colors">
+          Thu hồi mã này
+        </button>
+      </div>
+      <p class="mt-1.5 text-xs text-gray-500">
+        Chuyển sang trạng thái <code>revoked</code>, hàng dữ liệu vẫn còn để đối soát.
+        Không xoá ngay — không có bước xác nhận vì chỉ chạm đúng một mã.
+      </p>
+    </form>
+    {% endif %}
+
+    {% if duoc_thu_hoi_loat %}
+    <form method="post" action="/kho/thuhoi/denghi" class="p-5">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <label class="block text-sm font-medium text-gray-700 mb-1.5">
+        Hàng loạt <span class="font-normal text-gray-500">— sẽ hiện số mã và tổng tiền để
+        xem trước, chưa xoá gì</span>
+      </label>
+      <div class="flex flex-col sm:flex-row gap-3">
+        <select id="th_loai" name="loai" required
+                class="flex-1 px-3.5 py-2.5 rounded-xl border border-gray-300 bg-white text-sm
+                       focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500">
+          {% for ma_loai in ton_theo_loai %}
+          <option value="{{ ma_loai }}">{{ nhan_loai.get(ma_loai, ma_loai) }}</option>
+          {% endfor %}
+        </select>
+        {# KHÔNG có `<option value="">`: ô rỗng bị máy chủ từ chối, còn "TẤT CẢ" phải là một
+           lựa chọn TƯỜNG MINH. Sự khác nhau giữa một mệnh giá và toàn bộ kho không được
+           là sự khác nhau giữa có chữ và không có chữ. #}
+        <select id="th_menh_gia" name="menh_gia" required
+                class="flex-1 px-3.5 py-2.5 rounded-xl border border-gray-300 bg-white text-sm
+                       focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500">
+          {% for ma_loai, ds in ton_theo_loai.items() %}
+            {% for mg in ds %}
+            <option value="{{ mg.vnd }}" data-thloai="{{ ma_loai }}">{{ mg.nhan }}</option>
+            {% endfor %}
+            <option value="{{ menh_gia_tat_ca }}" data-thloai="{{ ma_loai }}">
+              TẤT CẢ mệnh giá
+            </option>
+          {% endfor %}
+        </select>
+        <button type="submit"
+                class="px-5 py-2.5 rounded-xl border border-rose-300 text-rose-700 text-sm
+                       font-medium hover:bg-rose-50 focus:outline-none focus:ring-2
+                       focus:ring-rose-500 focus:ring-offset-2 transition-colors">
+          Xem trước
+        </button>
+      </div>
+      {% if not ton_theo_loai %}
+      <p class="mt-1.5 text-xs text-gray-500">Kho không còn mã nào để thu hồi.</p>
+      {% endif %}
+    </form>
+    {% endif %}
+  </div>
 </div>
 {% endif %}
 

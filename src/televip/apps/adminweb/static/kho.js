@@ -5,11 +5,11 @@
 // vận hành biết muộn hơn một nhịp. Đừng chuyển hàng rào nào vào đây.
 //
 // Danh sách mệnh giá dựng sẵn trong HTML kèm `data-loai`; ở đây chỉ ẩn/hiện.
-(function () {
+function noiHaiO(idLoai, idMenhGia, khoaData) {
   "use strict";
 
-  var oLoai = document.getElementById("loai");
-  var oMenhGia = document.getElementById("menh_gia");
+  var oLoai = document.getElementById(idLoai);
+  var oMenhGia = document.getElementById(idMenhGia);
   if (!oLoai || !oMenhGia) return;
 
   // Giữ bản gốc: `<option>` bị gỡ khỏi DOM thì không lấy lại được khi đổi loại.
@@ -18,7 +18,7 @@
   function loc() {
     var loai = oLoai.value;
     var conLai = tatCa.filter(function (o) {
-      return o.dataset.loai === loai;
+      return o.dataset[khoaData] === loai;
     });
 
     oMenhGia.textContent = "";
@@ -38,4 +38,9 @@
 
   oLoai.addEventListener("change", loc);
   loc();
-})();
+}
+
+// Hai cặp ô dùng chung một cách lọc: nạp kho và thu hồi hàng loạt. Cặp nào không có trên
+// trang (vì thiếu quyền) thì `noiHaiO` thoát ngay.
+noiHaiO("loai", "menh_gia", "loai");
+noiHaiO("th_loai", "th_menh_gia", "thloai");
