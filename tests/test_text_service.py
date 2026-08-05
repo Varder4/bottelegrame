@@ -436,7 +436,7 @@ def test_validate_tu_choi_format_spec_sai_kieu() -> None:
 def test_preview_dien_bien_mau() -> None:
     body = text_service.preview("code.delivered")
     assert "{" not in body
-    assert "TELEVIP-ABC123" in body
+    assert "HK79-ABC123" in body
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -595,7 +595,7 @@ async def test_xemnoidung_in_bien_bat_buoc_va_ban_xem_thu(wired) -> None:
 
     assert "{code_value}" in body, "phải in template gốc"
     assert "{value_vnd}" in body or "{value_vnd:vnd}" in body
-    assert "TELEVIP-ABC123" in body, "phải kèm bản xem thử đã điền biến mẫu"
+    assert "HK79-ABC123" in body, "phải kèm bản xem thử đã điền biến mẫu"
     assert "10.000đ" in body
 
 
@@ -610,7 +610,7 @@ async def test_suanoidung_giu_xuong_dong_va_tra_ve_ban_xem_thu(wired) -> None:
 
     assert await stored_content("code.delivered") == moi
     assert "\n" in moi
-    assert "Dòng 1: TELEVIP-ABC123" in sender.last, "trả lời phải kèm bản xem thử"
+    assert "Dòng 1: HK79-ABC123" in sender.last, "trả lời phải kèm bản xem thử"
 
 
 @pytest.mark.asyncio
@@ -640,7 +640,7 @@ async def test_resetnoidung_ve_ban_mac_dinh(wired) -> None:
     await admin_texts.cmd_resetnoidung(make_update(OWNER_ID), make_context(sender, "start.welcome"))
 
     assert await text_service.render("start.welcome") == domain_texts.start_welcome()
-    assert "TELEVIP" in sender.last
+    assert "HK79 - Quà Tặng" in sender.last
 
 
 @pytest.mark.asyncio

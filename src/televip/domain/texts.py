@@ -116,7 +116,7 @@ ALERT_NOT_ENOUGH_POINTS = "⚠️ Không đủ điểm!"
 def start_welcome() -> str:
     """Caption tin 1 của `/start` (ảnh `banner_start`)."""
     return (
-        "🎁TELEVIP - TẶNG CODE 24/7🎲\n"
+        "🎁HK79 - Quà Tặng - TẶNG CODE 24/7🎲\n"
         "\n"
         "Mời bạn nhận quà không giới hạn....!✅\n"
         "Mời 5 người nhận 1 code👇"
@@ -125,7 +125,7 @@ def start_welcome() -> str:
 
 def start_gift_teaser() -> str:
     """Caption tin 2 của `/start` (ảnh `banner_gift`), đi kèm nút `🎁 Mở Quà Ngay 🎁`."""
-    return "🎁TELEVIP - TẶNG CODE 24/7🎲\n\n🌟Tân Thủ Ngẫu nhiên Nhận 10K, 20K, 50K, 88K🌈"
+    return "🎁HK79 - Quà Tặng - TẶNG CODE 24/7🎲\n\n🌟Tân Thủ Ngẫu nhiên Nhận 10K, 20K, 50K, 88K🌈"
 
 
 # ── 13.2.2 · Xác minh ───────────────────────────────────────────────
@@ -246,7 +246,7 @@ def tanthu_step2(invite_links: Sequence[str], fanpage_link: str) -> str:
     """
     numbered = numbered_links(invite_links)
     return (
-        "🎁TELEVIP - TẶNG CODE 24/7🎲\n"
+        "🎁HK79 - Quà Tặng - TẶNG CODE 24/7🎲\n"
         "\n"
         "✅ BƯỚC 1: ĐÃ XÁC MINH!\n"
         "\n"
@@ -433,9 +433,9 @@ def share_post_intro() -> str:
 def share_post() -> str:
     """Caption bài viết chia sẻ (ảnh `banner_share`)."""
     return (
-        "🎁TELEVIP - TẶNG CODE 24/7🎲\n"
+        "🎁HK79 - Quà Tặng - TẶNG CODE 24/7🎲\n"
         "\n"
-        "🎉 TeleVip - TX / CL TẶNG BẠN CODE TÂN THỦ! 🎁\n"
+        "🎉 HK79 - Quà Tặng - TX / CL TẶNG BẠN CODE TÂN THỦ! 🎁\n"
         f"{SEP_SHARE}\n"
         "💰 Nhận ngay CODE miễn phí\n"
         "🎮 Chơi liền – Rút liền – Không cần nạp!\n"
@@ -513,7 +513,7 @@ def account_stats(
     không bao giờ tính hạng thật.
     """
     return (
-        "🎁TELEVIP - TẶNG CODE 24/7🎲\n"
+        "🎁HK79 - Quà Tặng - TẶNG CODE 24/7🎲\n"
         "\n"
         "📊 THỐNG KÊ TỔNG QUAN HỆ THỐNG\n"
         "\n"
@@ -561,7 +561,7 @@ def leaderboard(
     """
     mode = "HÔM NAY" if today else "TOÀN THỜI GIAN"
     return (
-        "🎁TELEVIP - TẶNG CODE 24/7🎲\n"
+        "🎁HK79 - Quà Tặng - TẶNG CODE 24/7🎲\n"
         "\n"
         f"👑 BẢNG XẾP HẠNG — {mode}\n"
         "\n"
@@ -852,7 +852,7 @@ def share_event_default(
 ) -> str:
     """Nội dung seed khi `share_event_config` chưa được admin cấu hình."""
     return (
-        "✨ NHẬN CODE TELEVIP SIÊU NHANH ✨\n"
+        "✨ NHẬN CODE HK79 - Quà Tặng SIÊU NHANH ✨\n"
         "\n"
         "💥 Chia sẻ càng mạnh – Nhận code càng khủng!\n"
         "\n"
@@ -862,7 +862,7 @@ def share_event_default(
         "💰 Săn CODE vàng, CODE lộc mỗi ngày\n"
         "🎁 Giao diện xịn, thao tác nhanh – chia sẻ là có quà!\n"
         "\n"
-        "📢 TELEVIP game tài xỉu, chẵn lẻ telegram, nạp rút siêu tốc, min rút 50k không vòng cược rườm rà\n"
+        "📢 HK79 - Quà Tặng game tài xỉu, chẵn lẻ telegram, nạp rút siêu tốc, min rút 50k không vòng cược rườm rà\n"
         "\n"
         f"{SEP_DASH}\n"
         "\n"
@@ -882,7 +882,7 @@ def share_event_default(
 
 def support(support_link: str) -> str:
     return (
-        "🎁TELEVIP - TẶNG CODE 24/7🎲\n"
+        "🎁HK79 - Quà Tặng - TẶNG CODE 24/7🎲\n"
         "\n"
         "👉 Chào bạn 🌸, để được hỗ trợ bạn vui lòng bấm vào link sau để gặp hỗ trợ viên nhé 🤝✨\n"
         "🙏 Cám ơn bạn! 💖\n"
@@ -907,7 +907,7 @@ def help_text(*, interval: int, reward_value_vnd: int, max_claims: int) -> str:
     phải luật đang chạy**, nó chỉ là chuỗi gõ tay không ai cập nhật.
     """
     return (
-        "🎁TELEVIP - TẶNG CODE 24/7🎲\n"
+        "🎁HK79 - Quà Tặng - TẶNG CODE 24/7🎲\n"
         "\n"
         "📖 HƯỚNG DẪN SỬ DỤNG BOT\n"
         "\n"
@@ -932,7 +932,7 @@ def help_text(*, interval: int, reward_value_vnd: int, max_claims: int) -> str:
         "❓ HỖ TRỢ:\n"
         '• Bấm "💁‍♀️ Hỗ Trợ – CSKH"\n'
         "\n"
-        "🎁 TeleVip - Nơi Mọi Điều Có Thể!"
+        "🎁 HK79 - Quà Tặng - Nơi Mọi Điều Có Thể!"
     )
 
 

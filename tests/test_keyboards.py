@@ -210,7 +210,7 @@ def test_campaign_block_dung_chung_cho_hai_man_hinh():
 
 
 def test_texts_khop_dac_ta_tung_ky_tu():
-    assert texts.start_welcome().splitlines()[0] == "🎁TELEVIP - TẶNG CODE 24/7🎲"
+    assert texts.start_welcome().splitlines()[0] == "🎁HK79 - Quà Tặng - TẶNG CODE 24/7🎲"
     assert texts.not_verified().startswith("⚠️ BẠN CHƯA XÁC THỰC TÀI KHOẢN!")
     assert texts.missing_groups(1, 3).splitlines()[2] == "📊 Tiến độ: 1/3"
     assert "💰 CODE TÂN THỦ: ABC-123" in texts.code_delivered("ABC-123", 10000)

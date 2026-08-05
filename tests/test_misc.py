@@ -290,7 +290,7 @@ async def test_event_chia_se_dung_noi_dung_seed_khi_chua_cau_hinh(wired) -> None
     sender = FakeSender()
     await misc.handle_share_event(make_update(10_201), make_context(sender))
 
-    assert "NHẬN CODE TELEVIP SIÊU NHANH" in sender.last
+    assert "NHẬN CODE HK79 - Quà Tặng SIÊU NHANH" in sender.last
     assert "https://t.me/televip_test_bot" in sender.last  # link bot lấy từ getMe
     assert "https://t.me/cong_dong" in sender.last
     urls = [b.url for row in sender.markups[-1].inline_keyboard for b in row]

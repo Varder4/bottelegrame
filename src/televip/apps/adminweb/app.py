@@ -94,7 +94,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         lifespan=_vong_doi,
-        title="TeleVip — Quản trị",
+        title="HK79 - Quà Tặng — Quản trị",
         # Tắt hẳn tài liệu API tự sinh: panel không phải một API công khai, và
         # `/docs` là bản đồ đường dẫn miễn phí cho người dò.
         docs_url=None,
