@@ -898,7 +898,23 @@ def play_game() -> str:
 
 
 def show_full() -> str:
-    return "🔞 XEM SHOW FULL 🔞\n\nBấm nút bên dưới để xem ngay!"
+    """Caption của màn `XEM SHOW FULL`. Gửi kèm ảnh `assets/show_full.jpg`.
+
+    Caption Telegram tối đa 1024 ký tự — chuỗi này dài ~380 nên còn dư cho người vận hành
+    sửa thêm qua panel.
+    """
+    return (
+        "A LÀM THEO HƯỚNG DẪN BÊN DƯỚI ĐỂ TẢI ĐÚNG APP E LIVE SHOW  🔞\n"
+        "\n"
+        "Iphone : vào safari  gõ  HK7906.COM\n"
+        "Android : vào CHROME  gõ  HK7906.COM\n"
+        "\n"
+        "➡️Lưu ý : Đăng ký tài khoản , liên kết SĐT mới xem được live\n"
+        "\n"
+        "Nếu cần CODE trải nghiệm , anh gửi ID (đã xác thực sđt ) cho em tặng quà ❤️\n"
+        "\n"
+        "EM SẼ SHOW TẠI LINK TRÊN"
+    )
 
 
 # ── 13.2.13 · /help ─────────────────────────────────────────────────

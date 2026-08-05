@@ -242,6 +242,7 @@ class Sender:
         *,
         filename: str,
         caption: str | None = None,
+        reply_markup: InlineKeyboardMarkup | None = None,
         lane: Lane = "bulk",
         idem_key: str | None = None,
     ) -> PhotoUpload | None:
@@ -255,6 +256,10 @@ class Sender:
 
         `lane="bulk"` vì đây là thao tác quản trị, không phải tin người dùng đang chờ —
         nó không được chen trước một mã code đang trên đường tới tay ai đó.
+
+        `caption` và `reply_markup` có mặt để lần tải lên ĐẦU TIÊN cũng là một tin hoàn
+        chỉnh gửi cho người dùng. Thiếu chúng thì màn hình nào nhớ `file_id` sau lần dùng
+        đầu sẽ gửi hai tin ở lượt đó: một tin ảnh trần để lấy `file_id`, rồi một tin thật.
         """
 
         async def call() -> Message:
@@ -262,6 +267,7 @@ class Sender:
                 chat_id=chat_id,
                 photo=InputFile(photo, filename=filename),
                 caption=caption,
+                reply_markup=reply_markup,
             )
 
         message = await self._deliver_message(

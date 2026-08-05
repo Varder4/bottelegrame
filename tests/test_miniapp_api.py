@@ -28,6 +28,7 @@ from televip.cache.client import close_redis, init_redis
 from televip.core.config import Settings
 from televip.db.engine import dispose_engine, init_engine
 from televip.services import settings_service
+from televip.telegram import keyboards
 from tests.conftest import TEST_DATABASE_URL, TEST_REDIS_URL, make_user
 
 BOT_TOKEN = "123456789:AAtest-token-chi-dung-trong-test-khong-that"
@@ -437,3 +438,77 @@ async def test_bo_dem_so_lan_thu_co_han_dung(api: httpx.AsyncClient, infra: Asyn
 )
 async def test_body_thieu_truong_thi_422(api: httpx.AsyncClient, body: dict):
     assert (await api.post("/api/verify", json=body)).status_code == 422
+
+
+# ── Tin BƯỚC 2 tự nhảy sau khi xác minh ─────────────────────────────
+
+
+async def _gieo_nhom(db: AsyncSession, *, so_nhom: int = 2) -> None:
+    """Nhóm bắt buộc — không có nhóm nào thì không có gì để mời vào."""
+    for i in range(so_nhom):
+        await db.execute(
+            text(
+                "INSERT INTO required_chats (chat_id, title, invite_link, is_active, sort_order) "
+                "VALUES (:c, :t, :l, true, :o) ON CONFLICT (chat_id) DO NOTHING"
+            ),
+            {"c": -100_000 - i, "t": f"Kênh {i}", "l": f"https://t.me/kenh{i}", "o": i},
+        )
+    await db.commit()
+
+
+async def _tin_buoc_2(db: AsyncSession, user_id: int) -> list:
+    return list(
+        (
+            await db.execute(
+                text("SELECT chat_id, method, payload FROM outbox_messages WHERE dedupe_key = :k"),
+                {"k": f"verify_step2:{user_id}"},
+            )
+        ).all()
+    )
+
+
+@pytest.mark.asyncio
+async def test_xac_minh_xong_thi_tin_BUOC_2_vao_hang_doi(
+    api: httpx.AsyncClient, infra: AsyncSession
+):
+    """Người vừa xác minh không phải tự đi tìm nút — bot đẩy họ sang bước 2 ngay.
+
+    Tiến trình web không gửi được gì, nên nó ghi ý định vào `outbox_messages`; worker bên
+    bot phát. Bài này đo đúng cái web làm được: hàng ý định có mặt, đúng người, đúng nút.
+    """
+    await _gieo_nhom(infra)
+
+    assert (await _verify(api)).status_code == 200
+
+    rows = await _tin_buoc_2(infra, USER_A["id"])
+    assert len(rows) == 1, "không có tin bước 2 nào được xếp"
+    assert rows[0].chat_id == USER_A["id"]
+    assert rows[0].method == "sendMessage"
+    assert "BƯỚC 2" in rows[0].payload["text"]
+    nut = rows[0].payload["reply_markup"]["inline_keyboard"][0][0]
+    assert nut["callback_data"] == keyboards.CB_CHECK_GROUPS
+
+
+@pytest.mark.asyncio
+async def test_xac_minh_lan_hai_KHONG_xep_them_tin(api: httpx.AsyncClient, infra: AsyncSession):
+    """Mở lại Mini App, bấm lại, mạng chậm — đều không được sinh tin thứ hai."""
+    await _gieo_nhom(infra)
+    assert (await _verify(api)).status_code == 200
+    assert (await _verify(api)).status_code == 200
+
+    assert len(await _tin_buoc_2(infra, USER_A["id"])) == 1
+
+
+@pytest.mark.asyncio
+async def test_chua_cau_hinh_nhom_thi_KHONG_xep_tin_rong(
+    api: httpx.AsyncClient, infra: AsyncSession
+):
+    """Màn bước 2 không có nhóm nào là màn người dùng không làm gì được mà vẫn bị chặn."""
+    await infra.execute(text("DELETE FROM required_chats"))
+    await infra.commit()
+
+    assert (await _verify(api)).status_code == 200
+    assert await _tin_buoc_2(infra, USER_A["id"]) == []
+    # …và việc xác minh vẫn phải thành công: thiếu cấu hình là lỗi của mình, không phải
+    # lý do để chặn người dùng.
+    assert await _verified_at(infra, USER_A["id"]) is not None

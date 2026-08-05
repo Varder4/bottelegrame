@@ -75,13 +75,13 @@ _THU_TU: tuple[str, ...] = (
     BTN_CODE_TAN_THU,
     BTN_MOI_BAN,
     BTN_EVENT,
+    BTN_THONG_KE_TK,
+    BTN_BXH,
+    BTN_CHECK_CHIA_SE,
+    BTN_HO_TRO,
     BTN_SHOW_FULL,
     BTN_DIEM_DANH,
     BTN_DOI_CODE,
-    BTN_BXH,
-    BTN_CHECK_CHIA_SE,
-    BTN_THONG_KE_TK,
-    BTN_HO_TRO,
 )
 
 #: Nút TẠM ẨN. Bỏ một nhãn khỏi tập này là hiện nó lại — handler và cooldown vẫn còn

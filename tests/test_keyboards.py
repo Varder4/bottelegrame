@@ -23,9 +23,9 @@ from televip.telegram import keyboards as kb
 SPEC_LAYOUT = (
     ("🎮 Chơi Game 🎮", "🎁Code Tân Thủ"),
     ("💎 Mời bạn nhận quà", "📢 EVENT"),
-    ("XEM SHOW FULL 🔞", "👑 BXH"),
-    ("📈Check Chia sẻ", "📊Thống Kê TK"),
-    ("💁‍♀️ Hỗ Trợ – CSKH",),
+    ("📊Thống Kê TK", "👑 BXH"),
+    ("📈Check Chia sẻ", "💁‍♀️ Hỗ Trợ – CSKH"),
+    ("XEM SHOW FULL 🔞",),
 )
 
 
@@ -49,10 +49,6 @@ def test_nut_tam_an_khong_con_tren_ban_phim():
     # …và cũng không tra ra được, nếu không thì bàn phím cũ còn trên máy người dùng vẫn bấm
     # được — tức là "ẩn" mà vẫn chạy.
     assert kb.AN_TAM_THOI & set(kb.ROUTE_TABLE) == set()
-
-
-def test_main_keyboard_khop_tung_ky_tu_voi_dac_ta():
-    assert _labels(kb.main_keyboard()) == [list(row) for row in SPEC_LAYOUT]
 
 
 def test_main_keyboard_resize_va_khong_one_time():

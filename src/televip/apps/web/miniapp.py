@@ -235,6 +235,17 @@ async def verify(payload: VerifyIn, request: Request) -> JSONResponse:
                     referrer_id=referrer_id,
                 )
 
+            # Đẩy người vừa xác minh sang BƯỚC 2 ngay, không bắt họ tự đi tìm nút.
+            #
+            # Tiến trình này KHÔNG gửi được gì (không có `Sender`, và token bucket 30
+            # tin/giây nằm ở tiến trình bot). Nên ở đây chỉ **ghi ý định** vào
+            # `outbox_messages`; `run_outbox_worker` bên bot phát nó trong vòng một nhịp.
+            # Cùng khuôn với ảnh của panel: web ghi, bot thực thi.
+            #
+            # `dedupe_key` neo theo `user_id`, và nhánh này chỉ chạy khi `_mark_verified`
+            # trả True — tức đúng một lần trong đời mỗi người.
+            await _xep_tin_buoc_2(db, identity.user_id)
+
     if not just_verified:
         # Bấm hai lần, mạng chậm, mở lại Mini App — đều rơi vào đây. Không phải lỗi của
         # người dùng nên không dùng mã HTTP lỗi; chỉ nói rằng không có gì thay đổi.
@@ -427,6 +438,57 @@ async def _ensure_user_row(db: AsyncSession, identity: Identity) -> None:
         """),
         {"uid": identity.user_id, "un": identity.username, "fn": identity.full_name},
     )
+
+
+async def _xep_tin_buoc_2(db: AsyncSession, user_id: int) -> None:
+    """Xếp tin BƯỚC 2 (tham gia nhóm) vào `outbox_messages`, trong CÙNG giao dịch.
+
+    Cùng giao dịch với `_mark_verified()` là điều kiện để không có trạng thái nửa vời: đã
+    đánh dấu xác minh nhưng người dùng không nhận được gì, hoặc ngược lại.
+
+    Chưa cấu hình nhóm bắt buộc thì **không xếp tin nào** — màn bước 2 rỗng để người dùng
+    không có gì để làm mà vẫn bị chặn. Nhánh này ghi log để vận hành thấy, giống hệt cách
+    handler `🎁Code Tân Thủ` bên bot xử lý.
+    """
+    from televip.domain import texts as domain_texts
+    from televip.services import membership, outbox, text_service
+    from televip.telegram import keyboards
+
+    chats = await membership.required_chats(db)
+    if not chats:
+        log.error("khong_co_nhom_bat_buoc", user_id=user_id)
+        return
+
+    invite_links = [row.invite_link for row in chats]
+    noi_dung = await text_service.render(
+        "tanthu.step2",
+        total=len(invite_links),
+        invite_list=domain_texts.numbered_links(invite_links),
+        fanpage_link=await settings_service.get_str("link.fanpage", "", db=db),
+    )
+    await outbox.enqueue(
+        db,
+        chat_id=user_id,
+        method="sendMessage",
+        payload={
+            "text": noi_dung,
+            # Cùng nút mà bên bot gắn vào màn này. Dựng bằng JSON thô vì tiến trình web
+            # không có `Sender` để mang một `InlineKeyboardMarkup` đi.
+            "reply_markup": {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": keyboards.BTN_CHECK_GROUPS,
+                            "callback_data": keyboards.CB_CHECK_GROUPS,
+                        }
+                    ]
+                ]
+            },
+        },
+        idem_key=f"verify_step2:{user_id}",
+        lane="interactive",
+    )
+    log.info("verify.xep_tin_buoc_2", user_id=user_id, so_nhom=len(invite_links))
 
 
 async def _mark_verified(db: AsyncSession, user_id: int) -> bool:

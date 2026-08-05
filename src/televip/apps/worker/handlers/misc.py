@@ -22,6 +22,7 @@ Ba luật chung, giống mọi handler khác:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Final
 
 from sqlalchemy import text as sql_text
@@ -29,6 +30,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from televip.cache.antispam import check_cooldown
+from televip.cache.client import get_redis
 from televip.core.errors import RateLimited
 from televip.core.logging import get_logger
 from televip.db.engine import session, transaction
@@ -267,11 +269,25 @@ async def handle_play_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # ── 🔞 XEM SHOW FULL ────────────────────────────────────────────────
 
 
+#: Ảnh kèm màn `XEM SHOW FULL`, đi cùng source. Không đọc từ đĩa ngoài project: lên VPS
+#: chỉ có source được triển khai, không có volume nào khác.
+_ANH_SHOW_FULL = Path(__file__).resolve().parents[3] / "assets" / "show_full.jpg"
+
+#: Khoá Redis nhớ `file_id` của ảnh trên. Tải lên MỘT lần rồi mọi lượt sau chỉ gửi tham
+#: chiếu — hệ cũ upload lại ảnh cho từng người và đốt 13,9 GB băng thông một đợt.
+#: Redis trống thì tự tải lại, nên đây là cache thật, không phải trạng thái phải giữ.
+_KHOA_FILE_ID_SHOW_FULL = "show_full:file_id"
+
+
 async def handle_show_full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Cùng khuôn với `🎮 Chơi Game`: một màn chữ + một nút link đọc từ `settings`.
+    """Màn `XEM SHOW FULL`: một tấm ảnh + caption sửa được + một nút link.
 
     Link nằm ở `link.show_full` chứ không viết cứng — đổi link là việc vận hành làm trên
     panel, không phải việc phải sửa mã và triển khai lại.
+
+    Ảnh gửi bằng `file_id` đã nhớ; lần đầu tiên (hoặc sau khi Redis bị xoá) thì tải lên
+    một lần rồi nhớ lại. Ảnh hỏng hay Telegram từ chối thì vẫn gửi phần chữ — mất ảnh còn
+    hơn mất cả hướng dẫn.
     """
     screen = await _enter(update, context, "show_full")
     if screen is None:
@@ -280,11 +296,42 @@ async def handle_show_full(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     show_link = await settings_service.get_str(LINK_SHOW_FULL_KEY, "")
     if not show_link:
         log.error("thieu_cau_hinh", key=LINK_SHOW_FULL_KEY)
-    await screen.sender.send_message(
-        screen.chat_id,
-        await text_service.render("show.full"),
-        reply_markup=keyboards.show_full_keyboard(show_link) if show_link else None,
-    )
+    caption = await text_service.render("show.full")
+    nut = keyboards.show_full_keyboard(show_link) if show_link else None
+
+    # Ba nhánh, và cả ba gửi ĐÚNG MỘT tin:
+    #   · đã nhớ `file_id`  → gửi tham chiếu (đường thường gặp, băng thông 0)
+    #   · chưa nhớ          → tải lên KÈM caption và nút, rồi nhớ `file_id`
+    #   · ảnh hỏng / bị từ chối → gửi phần chữ. Mất ảnh còn hơn mất cả hướng dẫn.
+    redis = get_redis()
+    da_nho = await redis.get(_KHOA_FILE_ID_SHOW_FULL)
+    if da_nho:
+        file_id = da_nho.decode() if isinstance(da_nho, bytes) else str(da_nho)
+        await screen.sender.send_photo(screen.chat_id, file_id, caption, reply_markup=nut)
+        return
+
+    try:
+        du_lieu = _ANH_SHOW_FULL.read_bytes()
+    except OSError as exc:
+        log.error("thieu_anh_show_full", duong_dan=str(_ANH_SHOW_FULL), detail=str(exc))
+        du_lieu = b""
+
+    if du_lieu:
+        ket_qua = await screen.sender.upload_photo(
+            screen.chat_id,
+            du_lieu,
+            filename=_ANH_SHOW_FULL.name,
+            caption=caption,
+            reply_markup=nut,
+            lane="interactive",
+        )
+        if ket_qua is not None:
+            await redis.set(_KHOA_FILE_ID_SHOW_FULL, ket_qua.file_id.encode())
+            log.info("da_nho_file_id_show_full", file_id=ket_qua.file_id)
+            return
+        log.error("tai_anh_show_full_that_bai")
+
+    await screen.sender.send_message(screen.chat_id, caption, reply_markup=nut)
 
 
 # ── 📢 EVENT (§13.2.10) ─────────────────────────────────────────────
